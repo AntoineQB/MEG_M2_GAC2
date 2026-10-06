@@ -1,0 +1,9 @@
+;RNAseq;;;;;
+Prlvt;Detail;ID;Status;Run;ID;Mutation
+1;Biopsies_colon_distal_(normal);P1;Normal;D1051;R33;None
+2;Biopsies_colon_proximal_(normal);P2;Normal;D1051;R34;None
+3;Polype_colon_droit_Anse_Froide;P3;Polyp;D1051;R35;BRAF_V600E
+4;Polype_colon_droit_Mucosectomie;P4;Polyp;D1051;R36;BRAF_V600E
+5;Polype_colon_transverse_Mucosectomie;P5;Polyp;D1051;R37;KRAS_G12W
+6;Polype_colon_transverse_Mucosectomie;P6;Polyp;D1051;R38;BRAF_V600E
+7;Polype_charni�re_Mucosectomie;P7;Polyp;D1051;R39;BRAF_V600E

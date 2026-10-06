@@ -1,0 +1,845 @@
+---
+title: "Analyse du méthylome des lymphomes"
+subtitle: "Étude de la signature épigénétique et caractérisation moléculaire"
+author: "DU Next Generation Sequencing - Université Paris Cité"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: 
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    code_download: true
+    number_sections: true
+    self_contained: true
+    df_print: paged
+---
+
+# Ressources et support
+
+## 📚 Documentation
+
+- **ComplexHeatmap** : https://jokergoo.github.io/ComplexHeatmap-reference/book/
+- **ggplot2** : https://ggplot2.tidyverse.org/
+- **ACP en R** : https://www.datacamp.com/tutorial/pca-analysis-r
+
+## 💾 Instructions de reproduction
+
+Pour reproduire cette analyse :
+
+1. **Télécharger le fichier `.Rmd`** (bouton "Code" en haut à droite)
+2. **Préparer les données** :
+   - `Fichier_Bvaleur_50K.csv` : matrice de β-values
+   - `Fichier_annotation.csv` : annotations cliniques
+3. **Modifier le répertoire de travail** (ligne 20 du fichier .Rmd)
+4. **Exécuter l'analyse** :
+   - Option 1 : Cliquer sur "Knit" pour générer le rapport HTML
+   - Option 2 : Exécuter chunk par chunk pour exploration interactive
+
+<div class="warning">
+**Prérequis techniques :**
+
+- R version ≥ 4.0.0
+- RStudio (recommandé)
+- Connexion Internet (pour installation packages)
+- Mémoire RAM ≥ 4 Go
+</div>
+
+## 🆘 Dépannage
+
+| Problème | Solution |
+|----------|----------|
+| Erreur d'installation de packages | Vérifier connexion Internet, mettre à jour R/RStudio |
+| "Fichier non trouvé" | Vérifier le répertoire de travail avec `getwd()` |
+| Erreur de mémoire | Réduire le nombre de CpG analysés (ex: top 500 au lieu de 1000) |
+| Graphiques illisibles | Augmenter les dimensions des figures dans les chunks |
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = TRUE,
+  warning = FALSE,
+  fig.width = 12,
+  fig.height = 8,
+  cache = FALSE
+)
+
+# IMPORTANT : Définir le répertoire de travail pour RMarkdown
+# À ADAPTER selon votre environnement
+knitr::opts_knit$set(root.dir = getwd())
+```
+<style>
+.note {
+  background-color: #f8f9fa;
+  border-left: 4px solid #6c757d;
+  padding: 12px 20px;
+  margin: 15px 0;
+  font-size: 0.95em;
+}
+.objectif {
+  background-color: #e7f3ff;
+  border-left: 4px solid #0066cc;
+  padding: 12px 20px;
+  margin: 15px 0;
+}
+.interpretation {
+  background-color: #f0f9ff;
+  border-left: 4px solid #0891b2;
+  padding: 12px 20px;
+  margin: 15px 0;
+  font-style: italic;
+}
+.warning {
+  background-color: #fff3cd;
+  border-left: 4px solid #ffc107;
+  padding: 12px 20px;
+  margin: 15px 0;
+}
+.question {
+  background-color: #e8f5e9;
+  border-left: 4px solid #4caf50;
+  padding: 12px 20px;
+  margin: 15px 0;
+  font-weight: 500;
+}
+</style>
+
+# Contexte et objectifs
+
+<div class="objectif">
+**Objectif du TP**
+
+Ce travail pratique a pour but d'analyser le profil de méthylation de l'ADN dans une cohorte de 16 échantillons de lymphomes. L'analyse épigénétique permet de :
+
+- Identifier les profils de méthylation différentiels entre échantillons
+- Caractériser la variabilité épigénétique inter-échantillons
+- Relier les signatures de méthylation aux caractéristiques cliniques
+- Découvrir des sous-groupes moléculaires par clustering non supervisé
+
+**Cohorte :** 16 échantillons de lymphomes  
+**Technologie :** Analyse de méthylation de l'ADN (β-values sur ~50 000 sites CpG)  
+**Analyses :** Heatmap hiérarchique et Analyse en Composantes Principales (ACP)
+</div>
+
+<div class="note">
+**Contexte biologique :** Les lymphomes sont des cancers du système lymphatique caractérisés par une grande hétérogénéité moléculaire. L'analyse du méthylome permet d'identifier des sous-groupes de patients présentant des profils épigénétiques distincts, avec des implications pronostiques et thérapeutiques potentielles.
+</div>
+
+---
+
+# Configuration de l'environnement
+
+## Définition du répertoire de travail
+
+```{r workspace_setup}
+# Création de l'arborescence (si nécessaire)
+dir.create("FIGURES", showWarnings = FALSE)
+dir.create("RESULTS", showWarnings = FALSE)
+
+cat(sprintf("✓ Répertoire de travail : %s
+✓ Arborescence vérifiée : FIGURES/, RESULTS/\n", getwd()))
+```
+
+<div class="note">
+**Organisation du projet :**  
+- Fichiers de données dans le répertoire principal
+- `FIGURES/` pour les visualisations
+- `RESULTS/` pour les exports de données
+</div>
+
+## Installation et chargement des packages
+
+```{r load_packages, message=FALSE}
+# Fonction utilitaire pour installer/charger les packages
+load_package <- function(pkg) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    install.packages(pkg, dependencies = TRUE, repos = "https://cran.r-project.org")
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Packages CRAN
+cran_packages <- c("ggplot2", "dplyr", "tidyr", "tidyverse", "data.table",
+                   "RColorBrewer", "grid", "ggrepel", "tibble")
+invisible(sapply(cran_packages, load_package))
+
+# Packages Bioconductor
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager", repos = "https://cran.r-project.org")
+}
+
+bioc_packages <- c("ComplexHeatmap", "circlize")
+for (pkg in bioc_packages) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    BiocManager::install(pkg, ask = FALSE, update = FALSE)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+cat("✓ Environnement R configuré avec succès\n")
+```
+
+---
+
+# Importation des données
+
+## Vérification et chargement des fichiers
+
+```{r load_data}
+# Vérification de la présence des fichiers
+fichiers_requis <- c("Fichier_Bvaleur_50K.csv", "Fichier_annotation.csv")
+statut_fichiers <- file.exists(fichiers_requis)
+
+if (!all(statut_fichiers)) {
+  cat("✗ Fichiers manquants :\n")
+  print(fichiers_requis[!statut_fichiers])
+  stop("Veuillez placer tous les fichiers requis dans le répertoire de travail")
+}
+
+# Chargement du fichier de β-values
+data <- read.csv("Fichier_Bvaleur_50K.csv", header = TRUE, sep = ",")
+
+# Chargement du fichier d'annotations cliniques
+annotation <- read.csv("Fichier_annotation.csv", header = TRUE, sep = ";")
+
+cat(sprintf("✓ Données importées avec succès
+  • Matrice de méthylation : %d sites CpG × %d échantillons
+  • Annotations cliniques : %d échantillons × %d variables\n",
+  nrow(data), ncol(data) - 1,
+  nrow(annotation), ncol(annotation)))
+```
+
+## Exploration des données
+
+```{r explore_data}
+cat("═══════════════════════════════════════════════════════════\n")
+cat("              APERÇU DES DONNÉES DE MÉTHYLATION            \n")
+cat("═══════════════════════════════════════════════════════════\n\n")
+
+cat("Premières lignes de la matrice de méthylation :\n")
+print(head(data, 3))
+
+cat("\n\nAperçu des annotations cliniques :\n")
+print(head(annotation, 3))
+
+cat("\n\nRésumé des variables cliniques :\n")
+cat(sprintf("  • Nombre de patients : %d
+  • Décès observés + Transfo : %d
+  • Transformations : %d\n",
+  length(unique(annotation$Patient)),
+  sum(annotation$Deceased == "Yes", na.rm = TRUE),
+  sum(annotation$Transformed == "Yes", na.rm = TRUE)))
+```
+
+<div class="note">
+**Variables cliniques :**
+
+- **Patient** : Identifiant du patient dont provient l'échantillon
+- **Deceased** : Statut vital (Yes = décédé, No = vivant)
+- **Transformed** : Transformation tumorale (Yes = transformation observée, No = pas de transformation)
+</div>
+
+---
+
+# Analyse de variabilité épigénétique
+
+<div class="note">
+**Principe :** Pour identifier les sites CpG les plus informatifs, nous sélectionnons les 1000 sites présentant la plus grande variabilité inter-échantillons. Ces sites hautement variables sont les plus susceptibles de capturer l'hétérogénéité biologique de la cohorte.
+</div>
+
+## Sélection des sites CpG les plus variables
+
+```{r variable_cpg}
+# Préparation de la matrice (exclusion de la colonne "Name")
+data_heat <- data %>% 
+  select(-Name)
+data_heat <- data[,2:17]
+
+mat <- as.matrix(data_heat)
+rownames(mat) <- data$Name
+
+# Calcul de la variance pour chaque site CpG
+variances <- apply(mat, 1, var, na.rm = TRUE)
+var_df <- data.frame(
+  Name = rownames(mat), 
+  Variance = variances
+)
+
+# Tri par variance décroissante
+var_df_sorted <- var_df %>% arrange(desc(Variance))
+
+# Sélection des 1000 CpG les plus variables
+top_1000_cpg <- var_df_sorted$Name[1:1000]
+mat_top_1000 <- mat[top_1000_cpg, ]
+
+cat(sprintf("✓ Sélection des sites CpG variables
+  • Total de sites : %d
+  • Sites sélectionnés : %d (top 1000)
+  • Variance moyenne (top 1000) : %.4f
+  • Variance médiane (top 1000) : %.4f\n",
+  nrow(mat),
+  nrow(mat_top_1000),
+  mean(var_df_sorted$Variance[1:1000], na.rm = TRUE),
+  median(var_df_sorted$Variance[1:1000], na.rm = TRUE)))
+
+# Export de la liste des CpG variables
+write.csv(var_df_sorted[1:1000, ], "RESULTS/Top1000_CpG_variables.csv", row.names = FALSE)
+```
+
+<div class="question">
+**Question pour réflexion :** Pourquoi se concentrer sur les sites CpG les plus variables ? Que représentent ces sites d'un point de vue biologique ?
+</div>
+
+---
+
+# Heatmap hiérarchique
+
+<div class="note">
+**Principe du clustering hiérarchique :** 
+
+Le clustering hiérarchique regroupe les échantillons (colonnes) et les CpG (lignes) selon leur similarité. La méthode de Ward minimise la variance intra-groupe, créant des clusters homogènes. Les dendrogrammes permettent de visualiser les relations hiérarchiques entre échantillons.
+</div>
+
+## Heatmap simple (sans annotations)
+
+```{r heatmap_simple, fig.width=12, fig.height=10}
+# Définition de la palette de couleurs
+col_fun <- colorRamp2(c(0, 0.5, 1), c("darkblue", "lightblue", "red"))
+
+# Création de la heatmap
+hm_simple <- Heatmap(
+  mat_top_1000,
+  name = "β-value",
+  col = col_fun,
+  clustering_method_rows = "ward.D",
+  clustering_method_columns = "ward.D",
+  show_row_names = FALSE,
+  show_column_names = TRUE,
+  column_title = "Profil de méthylation des lymphomes (1000 CpG les plus variables)",
+  column_title_gp = gpar(fontsize = 14, fontface = "bold"),
+  column_names_rot = 45,
+  heatmap_legend_param = list(
+    title = "B-value",
+    at = seq(0, 1, by = 0.2),
+    legend_direction = "vertical"
+  )
+)
+
+draw(hm_simple)
+
+# Sauvegarde
+pdf("FIGURES/Heatmap_Lymphomes_Simple.pdf", width = 12, height = 10)
+draw(hm_simple)
+dev.off()
+
+cat("✓ Heatmap simple générée : FIGURES/Heatmap_Lymphomes_Simple.pdf\n")
+```
+
+<div class="interpretation">
+**Interprétation :** La heatmap révèle la structure hiérarchique des échantillons basée sur leur profil de méthylation. Les échantillons qui se regroupent partagent des patterns épigénétiques similaires. Les zones rouges indiquent une hyperméthylation (β-value proche de 1), tandis que les zones bleues indiquent une hypométhylation (β-value proche de 0).
+</div>
+
+## Préparation des annotations cliniques
+
+```{r prepare_annotations}
+# Préparation du dataframe d'annotations
+anno_col <- annotation %>%
+  select(ID, Patient, Deceased, Transformed, Gene_1) %>%
+  as.data.frame()
+
+# Alignement des annotations avec l'ordre des colonnes de la matrice
+anno_col <- anno_col[match(colnames(mat_top_1000), anno_col$ID), ]
+rownames(anno_col) <- anno_col$ID
+
+# Définition des palettes de couleurs pour les annotations
+col_list <- list(
+  Patient = setNames(
+    RColorBrewer::brewer.pal(length(unique(anno_col$Patient)), "Set1"), 
+    unique(anno_col$Patient)
+  ),
+  Deceased = c(Yes = "#170F00", No = "#ECEBF2"),
+  Transformed = c(Yes = "#C740F5", No = "#ECEBF2"),
+  Gene_1 = c(MUT = "#F55D22", doubt = "grey", WT = "blue")
+)
+
+cat(sprintf("✓ Annotations préparées
+  • Patients uniques : %d
+  • Échantillons décédés : %d / %d
+  • Échantillons transformés : %d / %d\n",
+  length(unique(anno_col$Patient)),
+  sum(anno_col$Deceased == "Yes", na.rm = TRUE), nrow(anno_col),
+  sum(anno_col$Transformed == "Yes", na.rm = TRUE), nrow(anno_col)))
+```
+
+## Heatmap annotée
+
+```{r heatmap_annotated, fig.width=12, fig.height=12}
+# Création des annotations combinées
+Top_annotation <- HeatmapAnnotation(
+  Patient = anno_col$Patient,
+  Deceased = anno_col$Deceased,
+  Gene_1 = anno_col$Gene_1,
+  col = list(
+    Patient = col_list$Patient,
+    Deceased = col_list$Deceased,
+    Gene_1 = col_list$Gene_1
+  ),
+  annotation_legend_param = list(
+    Patient = list(
+      title = "Patient",
+      at = unique(anno_col$Patient),
+      labels = unique(anno_col$Patient)
+    ),
+    Deceased = list(
+      title = "Décédé",
+      at = c("Yes", "No"),
+      labels = c("Oui", "Non")
+    ),
+     Gene_1 = list(
+      title = "Gene_1",
+      at = unique(anno_col$Gene_1),
+      labels = unique(anno_col$Gene_1)
+    )
+  ),
+  border = FALSE,
+  annotation_name_side = "left"
+)
+
+Bottom_annotation <- HeatmapAnnotation(
+  Transformed = anno_col$Transformed,
+  col = list(Transformed = col_list$Transformed),
+  annotation_legend_param = list(
+    Transformed = list(
+      title = "Transformé",
+      at = c("Yes", "No"),
+      labels = c("Oui", "Non")
+    )
+  ),
+  border = FALSE,
+  annotation_name_side = "left"
+)
+
+# Création de la heatmap annotée
+hm_annotated <- Heatmap(
+  mat_top_1000,
+  name = "β-value",
+  col = col_fun,
+  clustering_method_rows = "ward.D",
+  clustering_method_columns = "ward.D",
+  show_row_names = FALSE,
+  show_column_names = TRUE,
+  column_title = "Profil de méthylation des lymphomes avec annotations cliniques",
+  column_title_gp = gpar(fontsize = 14, fontface = "bold"),
+  column_names_rot = 45,
+  top_annotation = Top_annotation,
+  bottom_annotation = Bottom_annotation,
+  heatmap_legend_param = list(
+    title = "β-value",
+    at = seq(0, 1, by = 0.2),
+    legend_direction = "vertical"
+  )
+)
+
+draw(hm_annotated)
+
+# Sauvegarde
+pdf("FIGURES/Heatmap_Lymphomes_Annote_2.pdf", width = 12, height = 12)
+draw(hm_annotated)
+dev.off()
+
+cat("✓ Heatmap annotée générée : FIGURES/Heatmap_Lymphomes_Annotee.pdf\n")
+```
+
+<div class="interpretation">
+**Interprétation clinique :** 
+
+Les annotations permettent de visualiser les associations potentielles entre :
+
+- **Profils de méthylation** et **statut vital** (Deceased)
+- **Profils de méthylation** et **transformation tumorale** (Transformed)
+- **Regroupements d'échantillons** du même patient
+
+Observez si les échantillons provenant du même patient se regroupent ensemble, ce qui suggérerait une signature épigénétique patient-spécifique conservée.
+</div>
+
+<div class="question">
+**Questions pour l'analyse :**
+
+1. Identifiez-vous des clusters d'échantillons distincts ?
+2. Les échantillons "Transformed = Yes" se regroupent-ils ensemble ?
+3. Y a-t-il une association visuelle entre le statut "Deceased" et un profil de méthylation particulier ?
+4. Les échantillons d'un même patient présentent-ils des profils similaires ?
+</div>
+
+---
+
+# Analyse en Composantes Principales (ACP)
+
+<div class="note">
+**Principe de l'ACP :** 
+
+L'Analyse en Composantes Principales (PCA) est une méthode de réduction de dimension qui projette les données multidimensionnelles (ici ~50 000 CpG) dans un espace à 2 dimensions tout en conservant au maximum la variance. Les composantes principales (PC1, PC3, etc.) sont des combinaisons linéaires des variables originales qui capturent la variabilité maximale des données.
+
+**Interprétation des axes :**
+- **PC1** : Direction de plus grande variabilité
+- **PC3** : Direction de seconde plus grande variabilité (orthogonale à PC1)
+- Le pourcentage de variance expliquée indique la proportion d'information conservée par chaque axe
+</div>
+
+## Calcul de l'ACP
+
+```{r pca_analysis}
+# Préparation des données pour l'ACP
+data_heat <- data %>% select(-Name)
+
+# Calcul de l'ACP (transposition pour avoir échantillons en lignes)
+data_PCA <- prcomp(t(data_heat), scale. = TRUE)
+
+# Calcul de la variance expliquée par chaque composante
+variance <- data_PCA$sdev^2
+percent <- round(variance / sum(variance) * 100, 1)
+
+cat(sprintf("✓ ACP calculée
+  • Variance expliquée par PC1 : %.1f%%
+  • Variance expliquée par PC3 : %.1f%%
+  • Variance cumulée (PC1 + PC3) : %.1f%%\n",
+  percent[1], percent[2], sum(percent[1:2])))
+
+# Extraction des 10 premières composantes
+cat("\nVariance expliquée par les 10 premières composantes :\n")
+variance_table <- data.frame(
+  Composante = paste0("PC", 1:10),
+  Variance = percent[1:10],
+  Variance_cumulee = cumsum(percent[1:10])
+)
+print(variance_table)
+
+# Export du tableau
+write.csv(variance_table, "RESULTS/Variance_Composantes_Principales.csv", row.names = FALSE)
+```
+
+## Visualisation de l'ACP
+
+```{r pca_plot, fig.width=12, fig.height=8}
+# Préparation du dataframe pour ggplot
+dataframe_PCA <- as.data.frame(data_PCA$x)
+dataframe_PCA$Sample <- rownames(dataframe_PCA)
+
+# Fusion avec les annotations cliniques
+dataframe_PCA <- dataframe_PCA %>%
+  left_join(annotation, by = c("Sample" = "ID"))
+
+# Conversion des variables en facteurs pour les graphiques
+dataframe_PCA$Patient <- as.factor(dataframe_PCA$Patient)
+dataframe_PCA$Deceased <- as.factor(dataframe_PCA$Deceased)
+dataframe_PCA$Transformed <- as.factor(dataframe_PCA$Transformed)
+
+# Graphique PCA basique
+p_pca_basic <- ggplot(dataframe_PCA, aes(x = PC1, y = PC3)) +
+  geom_point(color = "blue", size = 4, alpha = 0.7) +
+  geom_text_repel(
+    aes(label = Sample),
+    size = 4,
+    color = "black",
+    box.padding = 0.5,
+    point.padding = 0.5,
+    segment.color = "grey50",
+    max.overlaps = Inf
+  ) +
+  labs(
+    title = "Analyse en Composantes Principales (PCA)",
+    subtitle = sprintf("16 échantillons de lymphomes - %d sites CpG", nrow(data)),
+    x = paste0("PC1 (", percent[1], "%)"),
+    y = paste0("PC3 (", percent[2], "%)")
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 11),
+    axis.title = element_text(face = "bold")
+  )
+
+print(p_pca_basic)
+ggsave("FIGURES/PCA_Lymphomes_Basic.png", plot = p_pca_basic, 
+       width = 12, height = 8, dpi = 300)
+
+cat("✓ PCA basique générée : FIGURES/PCA_Lymphomes_Basic.png\n")
+```
+
+## PCA avec annotations cliniques
+
+```{r pca_annotated, fig.width=14, fig.height=10}
+# PCA colorée par statut Deceased
+p_pca_deceased <- ggplot(dataframe_PCA, aes(x = PC1, y = PC3, color = Deceased)) +
+  geom_point(size = 5, alpha = 0.8) +
+  geom_text_repel(
+    aes(label = Sample),
+    size = 3.5,
+    show.legend = FALSE,
+    box.padding = 0.5,
+    point.padding = 0.5,
+    max.overlaps = Inf
+  ) +
+  scale_color_manual(
+    values = c("Yes" = "#170F00", "No" = "#4CAF50"),
+    labels = c("Yes" = "Oui", "No" = "Non"),
+    name = "Décédé"
+  ) +
+  labs(
+    title = "ACP - Stratification par statut vital",
+    x = paste0("PC1 (", percent[1], "%)"),
+    y = paste0("PC3 (", percent[2], "%)")
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.title = element_text(face = "bold"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    legend.background = element_rect(fill = "white", color = "black")
+  )
+
+# PCA colorée par statut Transformed
+p_pca_transformed <- ggplot(dataframe_PCA, aes(x = PC1, y = PC3, color = Transformed)) +
+  geom_point(size = 5, alpha = 0.8) +
+  geom_text_repel(
+    aes(label = Sample),
+    size = 3.5,
+    show.legend = FALSE,
+    box.padding = 0.5,
+    point.padding = 0.5,
+    max.overlaps = Inf
+  ) +
+  scale_color_manual(
+    values = c("Yes" = "#C740F5", "No" = "#81C784"),
+    labels = c("Yes" = "Oui", "No" = "Non"),
+    name = "Transformé"
+  ) +
+  labs(
+    title = "ACP - Stratification par transformation tumorale",
+    x = paste0("PC1 (", percent[1], "%)"),
+    y = paste0("PC3 (", percent[2], "%)")
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.title = element_text(face = "bold"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    legend.background = element_rect(fill = "white", color = "black")
+  )
+
+# PCA colorée par Patient
+p_pca_patient <- ggplot(dataframe_PCA, aes(x = PC1, y = PC3, color = Patient)) +
+  geom_point(size = 5, alpha = 0.8) +
+  geom_text_repel(
+    aes(label = Sample),
+    size = 3.5,
+    show.legend = FALSE,
+    box.padding = 0.5,
+    point.padding = 0.5,
+    max.overlaps = Inf
+  ) +
+  scale_color_brewer(palette = "Set1", name = "Patient") +
+  labs(
+    title = "ACP - Stratification par patient",
+    x = paste0("PC1 (", percent[1], "%)"),
+    y = paste0("PC3 (", percent[2], "%)")
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    axis.title = element_text(face = "bold"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    legend.background = element_rect(fill = "white", color = "black")
+  )
+
+# Affichage et sauvegarde
+print(p_pca_deceased)
+print(p_pca_transformed)
+print(p_pca_patient)
+
+ggsave("FIGURES/PCA_Lymphomes_Deceased.png", plot = p_pca_deceased, 
+       width = 12, height = 8, dpi = 300)
+ggsave("FIGURES/PCA_Lymphomes_Transformed.png", plot = p_pca_transformed, 
+       width = 12, height = 8, dpi = 300)
+ggsave("FIGURES/PCA_Lymphomes_Patient.png", plot = p_pca_patient, 
+       width = 12, height = 8, dpi = 300)
+
+cat(sprintf("✓ PCA annotées générées :
+  • FIGURES/PCA_Lymphomes_Deceased.png
+  • FIGURES/PCA_Lymphomes_Transformed.png
+  • FIGURES/PCA_Lymphomes_Patient.png\n"))
+```
+
+<div class="interpretation">
+**Interprétation de l'ACP :**
+
+1. **Séparation des groupes** : Les échantillons qui se regroupent dans l'espace PC1-PC3 partagent des profils de méthylation similaires
+
+2. **Statut vital (Deceased)** : Observez si les patients décédés (points noirs) se séparent des patients vivants (points verts) le long d'une composante principale
+
+3. **Transformation (Transformed)** : Les échantillons transformés (violet) forment-ils un cluster distinct ?
+
+4. **Effet patient** : Les échantillons d'un même patient (même couleur) sont-ils proches dans l'espace PCA, suggérant une signature épigénétique conservée ?
+
+**Analyse critique :** Si PC1 + PC3 expliquent moins de 50% de la variance totale, cela indique une forte complexité épigénétique nécessitant l'examen de composantes supplémentaires.
+</div>
+
+<div class="question">
+**Questions d'analyse avancée :**
+
+1. Quelle proportion de la variance totale est capturée par PC1 et PC3 ? Est-ce suffisant pour une interprétation biologique ?
+2. Identifiez-vous des outliers (échantillons isolés) ? Que pourraient-ils représenter biologiquement ?
+3. Les variables cliniques (Deceased, Transformed) expliquent-elles la séparation observée sur PC1 ou PC3 ?
+4. Comparez les résultats de l'ACP avec le clustering hiérarchique de la heatmap : retrouvez-vous les mêmes groupes ?
+</div>
+
+---
+
+# Synthèse et export des résultats
+
+## Statistiques récapitulatives
+
+```{r summary_stats}
+cat("\n═══════════════════════════════════════════════════════════\n")
+cat("              SYNTHÈSE DE L'ANALYSE MÉTHYLOME              \n")
+cat("═══════════════════════════════════════════════════════════\n\n")
+
+cat(sprintf("DONNÉES ANALYSÉES :
+  • Nombre d'échantillons : %d
+  • Sites CpG totaux : %d
+  • Sites CpG variables (top 1000) : %d
+
+CARACTÉRISTIQUES CLINIQUES :
+  • Patients uniques : %d
+
+VARIANCE EXPLIQUÉE (ACP) :
+  • PC1 : %.1f%%
+  • PC3 : %.1f%%
+  • PC1 + PC3 : %.1f%%
+  • PC1 à PC10 : %.1f%%\n",
+  ncol(mat), nrow(mat), length(top_1000_cpg),
+  length(unique(anno_col$Patient)),
+  percent[1], percent[2], sum(percent[1:2]), sum(percent[1:10])))
+
+cat("═══════════════════════════════════════════════════════════\n")
+```
+
+## Inventaire des fichiers générés
+
+```{r list_outputs}
+cat("\n✓ FICHIERS GÉNÉRÉS\n\nFigures (FIGURES/) :\n")
+fichiers_fig <- list.files("FIGURES", full.names = FALSE)
+if (length(fichiers_fig) > 0) {
+  walk(fichiers_fig, ~ cat("  •", .x, "\n"))
+} else {
+  cat("  (aucun fichier)\n")
+}
+
+cat("\nRésultats (RESULTS/) :\n")
+fichiers_res <- list.files("RESULTS", full.names = FALSE)
+if (length(fichiers_res) > 0) {
+  walk(fichiers_res, ~ cat("  •", .x, "\n"))
+} else {
+  cat("  (aucun fichier)\n")
+}
+```
+
+## Traçabilité
+
+```{r session_info}
+writeLines(capture.output(sessionInfo()), "RESULTS/Session_Info.txt")
+cat("\n✓ Informations de session enregistrées : RESULTS/Session_Info.txt
+  (Versions des packages R utilisés pour la reproductibilité)\n")
+```
+
+---
+
+# Conclusion et perspectives
+
+Cette analyse du méthylome a permis de :
+
+1. **Caractériser la variabilité épigénétique** au sein de la cohorte de lymphomes
+2. **Identifier des clusters d'échantillons** basés sur leur profil de méthylation
+3. **Explorer les associations** entre signatures épigénétiques et caractéristiques cliniques
+4. **Réduire la dimensionnalité** des données par ACP pour visualiser la structure globale
+
+## Limites de l'analyse
+
+<div class="warning">
+**Points d'attention :**
+
+- Cette analyse est **exploratoire** et nécessite une validation statistique formelle
+- Les associations observées ne démontrent pas de causalité
+- La taille limitée de la cohorte (n=16) limite la puissance statistique
+- L'absence de correction pour tests multiples dans cette analyse descriptive
+</div>
+
+## Perspectives d'analyse
+
+<div class="note">
+**Analyses complémentaires possibles :**
+
+1. **Analyses statistiques** : Tests de significativité pour les associations cliniques, correction FDR
+2. **Analyses fonctionnelles** : Annotation des CpG variables (gènes, régions régulatrices)
+3. **Analyses de survie** : Courbes de Kaplan-Meier stratifiées par profil de méthylation
+4. **Validation** : Cohorte indépendante pour confirmer les signatures identifiées
+5. **Intégration multi-omique** : Corrélation avec transcriptome, mutations, CNV
+6. **Clustering consensuel** : Définition robuste de sous-groupes moléculaires
+</div>
+
+---
+
+
+
+*Document généré le `r Sys.Date()`*  
+*DU Next Generation Sequencing - Université Paris Cité*  
+*Module : Analyse du Méthylome*
+
+<style>
+#back-to-top {
+  display: none;
+  position: fixed;
+  bottom: 20px;
+  right: 30px;
+  z-index: 99;
+  border: none;
+  outline: none;
+  background-color: #0066cc;
+  color: white;
+  cursor: pointer;
+  padding: 15px;
+  border-radius: 10px;
+  font-size: 18px;
+}
+
+#back-to-top:hover {
+  background-color: #004080;
+}
+</style>
+
+<script>
+window.onscroll = function() {
+  var btn = document.getElementById("back-to-top");
+  if (document.body.scrollTop > 300 || document.documentElement.scrollTop > 300) {
+    btn.style.display = "block";
+  } else {
+    btn.style.display = "none";
+  }
+};
+
+function topFunction() {
+  document.body.scrollTop = 0;
+  document.documentElement.scrollTop = 0;
+}
+</script>
+
+<button onclick="topFunction()" id="back-to-top" title="Retour en haut">↑</button>

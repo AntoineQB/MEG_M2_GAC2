@@ -1,0 +1,17 @@
+﻿ID;Patient;Sex;Deceased;Transformed;Gene_1;Gene_2;Gene_3
+S3;1;F;Yes;No;MUT;MUT;WT
+S10;1;F;Yes;No;MUT;MUT;MUT
+S1;2;F;No;No;WT;MUT;MUT
+S9;2;F;No;No;MUT;MUT;MUT
+S12;3;F;No;Yes;MUT;MUT;MUT
+S5;3;F;No;No;WT;doubt;doubt
+S15;3;F;No;No;WT;MUT;MUT
+S4;4;F;Yes;No;WT;MUT;MUT
+S11;4;F;Yes;Yes;MUT;MUT;MUT
+S2;5;F;Yes;No;MUT;MUT;MUT
+S14;5;F;Yes;No;MUT;MUT;MUT
+S7;6;M;No;No;MUT;MUT;WT
+S13;6;M;No;No;MUT;WT;MUT
+S8;7;F;No;No;MUT;MUT;WT
+S16;8;F;No;No;MUT;doubt;doubt
+S6;8;F;No;Yes;MUT;MUT;MUT

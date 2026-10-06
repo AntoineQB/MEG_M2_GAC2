@@ -1,8 +1,8 @@
-name: MEG-M2-GenomicsAnalysisCancers
+name: MEG-M2-GenomicsAnalysisCancers-2
 # d'après l'env `MEG-M1-A2B-2026`
 # adapté de Scaburet/template-R-SC-2026, qui est le template ok pour avoir Rstudio sur uracile après maj Plasma
 # Ajout des outils bash utilisés pour le pipeline RNAseq de l'UE A2B du M1 MEG - UPC
-# 25/09/2026
+# 06/10/2026
 
 channels:
   - conda-forge
@@ -47,9 +47,19 @@ dependencies:
   - r-irkernel
   - r-base>=4
 
-  # R packages for the M2 GAC course:
-  - r-essentials                  
-  - r-tidyverse                                       
+    # R packages for the M2 GAC course (ajouté le 5/10/2026)
+  - r-essentials
+  - r-tidyverse
+  - r-data.table
+  - r-ggplot2
+  - r-ggrepel
+  - r-ggpubr
+  - r-pheatmap
+  - r-reshape2
+  - r-patchwork
+  - r-scales
+  - r-rcolorbrewer
+  - r-tibble
   - r-markdown
   - r-rcpp
   - r-readxl
@@ -58,14 +68,22 @@ dependencies:
   - r-factominer
   - r-factoextra
   - r-dt
-  - r-rcolorbrewer
   - r-gplots
   - r-corrplot
   - r-rpart
   - r-rpart.plot
-  - r-biocManager                 # Bioconductor package manager
+  - r-biocmanager
   - r-statmod
   - r-ggfortify
   - r-ranger
   - r-repr
+  - r-circlize
+
+  # Bioconductor
+  - bioconductor-complexheatmap
+  - bioconductor-biomart
+  - bioconductor-limma
+  - bioconductor-genomicranges
+  - bioconductor-biocgenerics
   
+

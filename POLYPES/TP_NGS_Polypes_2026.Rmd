@@ -1,0 +1,1465 @@
+---
+title: "Analyse intégrée Méthylome-Transcriptome"
+subtitle: "Polypes colorectaux : approche multi-omique"
+author: "DU Next Generation Sequencing - Université Paris Cité"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: 
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    code_download: true
+    number_sections: true
+    self_contained: true
+    df_print: paged
+---
+
+
+# Ressources et support
+
+## 📚 Documentation
+
+- **R Markdown** : https://rmarkdown.rstudio.com/
+- **tidyverse** : https://www.tidyverse.org/
+- **Bioconductor** : https://www.bioconductor.org/
+- **limma User's Guide** : https://bioconductor.org/packages/release/bioc/vignettes/limma/inst/doc/usersguide.pdf
+- **ComplexHeatmap** : https://jokergoo.github.io/ComplexHeatmap-reference/book/
+
+## 💾 Instructions de reproduction
+
+Pour reproduire cette analyse :
+
+1. **Télécharger le fichier `.Rmd`** (bouton "Code" en haut à droite de ce document)
+2. **Préparer l'arborescence** :
+   - Créer un dossier `DATA/` contenant tous les fichiers de données
+   - Les dossiers `FIGURES/` et `RESULTS/` seront créés automatiquement
+3. **Modifier le chemin du répertoire de travail** (ligne 17 du fichier .Rmd)
+4. **Exécuter l'analyse** :
+   - Option 1 : Cliquer sur "Knit" pour générer le rapport HTML complet
+   - Option 2 : Exécuter chunk par chunk pour une exploration interactive
+
+<div class="warning">
+**Prérequis techniques :**
+
+- R version ≥ 4.0.0
+- RStudio (recommandé)
+- Connexion Internet (pour installation packages et requêtes BioMart)
+- Mémoire RAM ≥ 8 Go (recommandé pour manipulation de grandes matrices)
+</div>
+
+## 🆘 Dépannage
+
+**Problèmes fréquents et solutions :**
+
+| Problème | Solution |
+|----------|----------|
+| Erreur d'installation de packages | Vérifier la connexion Internet, mettre à jour R/RStudio |
+| "Fichier non trouvé" | Vérifier le chemin du répertoire de travail et la présence des fichiers dans `DATA/` |
+| Erreur BioMart | Réessayer plus tard (serveur parfois surchargé) ou utiliser un miroir alternatif |
+| Mémoire insuffisante | Fermer applications non nécessaires, augmenter RAM disponible pour R |
+
+**Pour obtenir de l'aide :**
+- Lire attentivement les messages d'erreur (souvent en rouge dans la console)
+- Vérifier la section "Vérification de l'intégrité des fichiers"
+- Consulter les documentations officielles des packages
+- Contacter les organisateurs du DU pour support technique
+
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = TRUE,
+  warning = FALSE,
+  fig.width = 12,
+  fig.height = 7,
+  cache = FALSE
+)
+
+# IMPORTANT : Définir le répertoire de travail pour RMarkdown
+# À ADAPTER selon votre environnement
+knitr::opts_knit$set(root.dir = getwd())
+```
+
+<style>
+.note {
+  background-color: #f8f9fa;
+  border-left: 4px solid #6c757d;
+  padding: 12px 20px;
+  margin: 15px 0;
+  font-size: 0.95em;
+}
+.objectif {
+  background-color: #e7f3ff;
+  border-left: 4px solid #0066cc;
+  padding: 12px 20px;
+  margin: 15px 0;
+}
+.interpretation {
+  background-color: #f0f9ff;
+  border-left: 4px solid #0891b2;
+  padding: 12px 20px;
+  margin: 15px 0;
+  font-style: italic;
+}
+.warning {
+  background-color: #fff3cd;
+  border-left: 4px solid #ffc107;
+  padding: 12px 20px;
+  margin: 15px 0;
+}
+</style>
+
+# Contexte et objectifs
+
+<div class="objectif">
+**Objectif du TP**
+
+Ce travail pratique propose une analyse intégrée des profils épigénétiques et transcriptomiques de polypes colorectaux. L'approche multi-omique permet d'identifier les mécanismes de régulation génique impliqués dans la transformation tumorale précoce.
+
+**Démarche scientifique :**
+
+- Caractérisation du phénotype méthylateur (signature CIMP)
+- Analyse de la méthylation du promoteur de *MLH1*
+- Profilage transcriptomique différentiel (Normal vs Polype)
+- Corrélation épigénome-transcriptome
+
+**Cohorte :** 7 échantillons (2 normaux, 5 polypes)  
+**Technologies :** Illumina EPIC (méthylation), RNA-seq (expression)
+</div>
+
+---
+
+# Configuration de l'environnement
+
+## Définition du répertoire de travail
+
+```{r workspace_setup}
+# Création de l'arborescence
+dir.create("DATA", showWarnings = FALSE)
+dir.create("FIGURES", showWarnings = FALSE)
+dir.create("RESULTS", showWarnings = FALSE)
+
+cat("✓ Répertoire de travail :", getwd(), "\n")
+cat("✓ Arborescence créée : DATA/, FIGURES/, RESULTS/\n")
+```
+
+<div class="note">
+**Organisation des données :**  
+`DATA/` contient les fichiers bruts • `FIGURES/` accueille les visualisations • `RESULTS/` stocke les analyses tabulaires
+</div>
+
+## Installation et chargement des packages
+
+```{r load_packages, message=FALSE}
+# Fonction utilitaire pour installer/charger les packages
+load_package <- function(pkg) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    install.packages(pkg, dependencies = TRUE, repos = "https://cran.r-project.org")
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Packages CRAN
+cran_packages <- c("tidyverse", "data.table", "ggplot2", "ggrepel", 
+                   "ggpubr", "pheatmap", "reshape2","ggpubr", "patchwork", "scales")
+invisible(sapply(cran_packages, load_package))
+
+# Packages Bioconductor
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager", repos = "https://cran.r-project.org")
+}
+
+bioc_packages <- c("ComplexHeatmap","org.Hs.eg.db", "circlize", "biomaRt", "limma")
+for (pkg in bioc_packages) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    BiocManager::install(pkg, ask = FALSE, update = FALSE)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+cat("✓ Environnement R configuré avec succès\n")
+```
+
+---
+
+# Importation des données
+
+## Vérification de l'intégrité des fichiers
+
+```{r check_data_integrity}
+fichiers_requis <- c(
+  "manifest_COMBINED_EPICv2_priority_EPICv1_fallback.csv",
+  "CIMP_meth_signature.csv",
+  "FinalReport_selected_columns_with_gene_info.txt",
+  "Correspondance_Prlvement_ID.csv",
+  "CG_MLH1_with_annotations.txt",
+  "tablecounts_tpm_polypes.csv",
+  "tablecounts_raw_polypes.csv",
+  "metadata_RNAseq.csv"
+)
+
+dossiers_recherche <- c(
+  "DATA",
+  "/srv/data/meg-m2-gac"
+)
+
+# Recherche chaque fichier dans les dossiers définis
+chemins_fichiers <- sapply(fichiers_requis, function(f) {
+  chemins_possibles <- file.path(dossiers_recherche, f)
+  chemins_existants <- chemins_possibles[file.exists(chemins_possibles)]
+  
+  if (length(chemins_existants) > 0) {
+    chemins_existants[1]
+  } else {
+    NA_character_
+  }
+})
+
+statut_fichiers <- !is.na(chemins_fichiers)
+
+if (all(statut_fichiers)) {
+  cat("✓ Tous les fichiers requis sont présents\n\n")
+  cat("Fichiers trouvés :\n")
+  for (i in seq_along(fichiers_requis)) {
+    cat(sprintf("  ✓ %s -> %s\n",
+                fichiers_requis[i],
+                chemins_fichiers[i]))
+  }
+} else {
+  cat("✗ Fichiers manquants :\n")
+  print(fichiers_requis[!statut_fichiers])
+  
+  stop(
+    paste0(
+      "Certains fichiers requis sont absents.\n",
+      "Dossiers recherchés :\n  - ",
+      paste(dossiers_recherche, collapse = "\n  - ")
+    )
+  )
+}
+```
+
+## Chargement des données de méthylation
+
+```{r load_methylation}
+# Manifeste Illumina EPIC combiné (EPICv1 + EPICv2)
+manifeste <- fread("/srv/data/meg-m2-gac/manifest_COMBINED_EPICv2_priority_EPICv1_fallback.csv", sep = ",") %>%
+  rename(chromosome = CHR, Start_hg38 = MAPINFO)
+
+# Signature CIMP (78 CpG discriminants)
+signature_CIMP <- read.csv("DATA/CIMP_meth_signature.csv", sep = ";")
+
+# Matrice de β-values (échantillons × sondes)
+donnees_meth <- read.delim("/srv/data/meg-m2-gac/FinalReport_selected_columns_with_gene_info.txt", sep = "\t")
+colnames(donnees_meth) <- c("IlmnID", "P1", "P2", "P3", "P4", "P5", "P6", "P7", 
+                             "UCSC_REFGENE_NAME", "UCSC_REFGENE_GROUPE")
+
+# Métadonnées cliniques
+annotations <- read.csv("DATA/Correspondance_Prlvement_ID.csv", skip = 1, sep = ";")
+
+# Sondes ciblant MLH1
+cpg_MLH1 <- read.delim("DATA/CG_MLH1_with_annotations.txt", sep = "\t")
+colnames(cpg_MLH1) <- c("IlmnID", "UCSC_REFGENE_NAME", "UCSC_REFGENE_GROUPE", 
+                        "P1", "P2", "P3", "P4", "P5", "P6", "P7")
+
+cat(sprintf("✓ Données de méthylation importées
+  • Manifeste : %d sondes (EPICv1 + EPICv2)
+  • Matrice de méthylation : %d sondes × %d échantillons
+  • Signature CIMP : %d CpG
+  • Sondes MLH1 : %d\n", 
+  nrow(manifeste), 
+  nrow(donnees_meth), 
+  ncol(donnees_meth) - 2,
+  nrow(signature_CIMP),
+  nrow(cpg_MLH1)))
+```
+
+## Chargement des données de transcriptome
+
+```{r load_transcriptome}
+# Expression normalisée (TPM)
+transcriptome_tpm <- read.csv("DATA/tablecounts_tpm_polypes.csv", row.names = 1)
+colnames(transcriptome_tpm) <- c("P1", "P2", "P3", "P4", "P5", "P6", "P7")
+
+# Comptages bruts
+transcriptome_raw <- read.csv("DATA/tablecounts_raw_polypes.csv", row.names = 1)
+colnames(transcriptome_raw) <- c("P1", "P2", "P3", "P4", "P5", "P6", "P7")
+
+# Métadonnées RNA-seq
+metadata <- read.csv("DATA/metadata_RNAseq.csv", sep = ";")
+
+cat(sprintf("✓ Données de transcriptome importées
+  • Expression TPM : %d gènes × %d échantillons
+  • Comptages bruts : %d gènes × %d échantillons\n",
+  nrow(transcriptome_tpm), ncol(transcriptome_tpm),
+  nrow(transcriptome_raw), ncol(transcriptome_raw)))
+```
+
+---
+
+# Analyse de la signature CIMP
+
+<div class="note">
+**Contexte biologique :** Le phénotype CIMP (*CpG Island Methylator Phenotype*) caractérise un sous-groupe de tumeurs colorectales présentant une hyperméthylation coordonnée de promoteurs riches en CpG. Cette signature épigénétique, définie par 78 CpG discriminants, constitue un biomarqueur pronostique et prédictif.
+</div>
+
+## Préparation de la matrice CIMP
+
+```{r prepare_cimp}
+# Fusion signature CIMP avec annotations génomiques
+signature_complete <- merge(signature_CIMP, manifeste, by = "IlmnID")
+
+# Extraction des β-values pour les 78 CpG de la signature
+donnees_CIMP <- merge(donnees_meth, signature_complete, by = "IlmnID") %>%
+  dplyr::select(IlmnID, P1:P7, UCSC_REFGENE_NAME, UCSC_REFGENE_GROUPE)
+
+cat("✓ Signature CIMP préparée :", nrow(donnees_CIMP), "CpG retenus\n")
+```
+
+## Heatmap stratifiée de la signature CIMP
+
+```{r cimp_heatmap, fig.width=10, fig.height=12}
+# Préparation de la matrice de β-values
+matrice_beta <- as.matrix(donnees_CIMP %>% dplyr::select(P1:P7))
+rownames(matrice_beta) <- donnees_CIMP$IlmnID
+
+# Annotations des échantillons (colonnes)
+anno_col <- annotations %>% 
+  dplyr::select(ID, Status, Mutation) %>%
+  filter(ID %in% colnames(matrice_beta)) %>%
+  as.data.frame()
+rownames(anno_col) <- anno_col$ID
+anno_col <- anno_col[colnames(matrice_beta), ]
+
+# Annotations des CpG (lignes)
+anno_cpg <- donnees_CIMP %>%
+  dplyr::select(IlmnID) %>%
+  left_join(
+    manifeste %>% dplyr::select(IlmnID, Relation_to_UCSC_CpG_Island, 
+                                 DB_Element_Type, GENCODEv47_Feature_Exon_Number),
+    by = "IlmnID"
+  ) %>%
+  mutate(
+    CpG_Island = case_when(
+      Relation_to_UCSC_CpG_Island == "Island" ~ "Îlot",
+      Relation_to_UCSC_CpG_Island == "Shore" ~ "Rivage",
+      Relation_to_UCSC_CpG_Island == "Shelf" ~ "Plateau",
+      TRUE ~ "Autre"
+    ),
+    Contexte = case_when(
+      GENCODEv47_Feature_Exon_Number == "TSS" ~ "TSS",
+      GENCODEv47_Feature_Exon_Number == "1stExon" ~ "1er exon",
+      GENCODEv47_Feature_Exon_Number == "5'UTR" ~ "5'UTR",
+      GENCODEv47_Feature_Exon_Number == "3'UTR" ~ "3'UTR",
+      GENCODEv47_Feature_Exon_Number == "Body" ~ "Corps",
+      GENCODEv47_Feature_Exon_Number == "intron" ~ "Intron",
+      str_starts(GENCODEv47_Feature_Exon_Number, "exon") ~ "Exon",
+      TRUE ~ "Autre"
+    ),
+    Element_Reg = case_when(
+      DB_Element_Type == "Promoter_2000bp" ~ "Promoteur",
+      DB_Element_Type == "Enhancer_5000bp" ~ "Enhancer",
+      TRUE ~ "Autre"
+    )
+  ) %>%
+  as.data.frame()
+rownames(anno_cpg) <- anno_cpg$IlmnID
+anno_cpg <- anno_cpg[rownames(matrice_beta), ]
+
+# Palettes de couleurs
+couleurs_statut <- c(Normal = "#0066cc", Polyp = "#d62728")
+couleurs_mutation <- c(BRAF_V600E = "#2ca02c", KRAS_G12W = "#9467bd", None = "#e0e0e0")
+couleurs_island <- c(Îlot = "#fee090", Rivage = "#fc8d59", Plateau = "#fee090", Autre = "#f0f0f0")
+couleurs_contexte <- c(
+  TSS = "#d73027", `1er exon` = "#4575b4", `5'UTR` = "#1b9e77", `3'UTR` = "#66c2a5",
+  Exon = "#91bfdb", Intron = "#e0e0e0", Corps = "#fdae61", Autre = "#f0f0f0"
+)
+couleurs_element <- c(Promoteur = "#FF8C00", Enhancer = "#FF00E4", Autre = "#f0f0f0")
+
+# Construction des annotations pour la heatmap
+ha_top <- HeatmapAnnotation(
+  Statut = anno_col$Status,
+  col = list(Statut = couleurs_statut),
+  border = FALSE,
+  annotation_name_side = "left"
+)
+
+ha_bottom <- HeatmapAnnotation(
+  Mutation = anno_col$Mutation,
+  col = list(Mutation = couleurs_mutation),
+  border = FALSE
+)
+
+ha_row <- rowAnnotation(
+  `Îlot CpG` = anno_cpg$CpG_Island,
+  Contexte = anno_cpg$Contexte,
+  `Élément` = anno_cpg$Element_Reg,
+  col = list(
+    `Îlot CpG` = couleurs_island,
+    Contexte = couleurs_contexte,
+    `Élément` = couleurs_element
+  ),
+  border = FALSE,
+  show_legend = TRUE
+)
+
+# Palette de couleurs pour les valeurs beta
+col_fun <- colorRamp2(c(0, 0.3, 0.6), c("blue", "white", "red"))
+
+# Création de la heatmap
+hm <- Heatmap(
+  matrice_beta,
+  name = "β-value",
+  col = col_fun,
+  clustering_method_rows = "ward.D2",
+  clustering_method_columns = "ward.D2",
+  top_annotation = ha_top,
+  bottom_annotation = ha_bottom,
+  left_annotation = ha_row,
+  show_row_names = FALSE,
+  show_column_names = TRUE,
+  column_title = "Profil de méthylation : signature CIMP (78 CpG)",
+  column_title_gp = gpar(fontsize = 13, fontface = "bold"),
+  heatmap_legend_param = list(
+    title = "β-value",
+    at = seq(0, 0.6, 0.2),
+    legend_direction = "vertical"
+  )
+)
+
+draw(hm)
+
+# Sauvegarde
+pdf("FIGURES/Heatmap_Signature_CIMP.pdf", width = 10, height = 12)
+draw(hm)
+dev.off()
+
+cat("✓ Heatmap CIMP générée : FIGURES/Heatmap_Signature_CIMP.pdf\n")
+```
+
+<div class="interpretation">
+**Interprétation :** Le clustering hiérarchique permet d'identifier les groupes d'échantillons partageant des profils de méthylation similaires. Une ségrégation claire entre tissus normaux et polypes suggère un remodelage épigénétique coordonné dans les lésions pré-néoplasiques, caractéristique du phénotype CIMP.
+</div>
+
+---
+
+# Analyse du promoteur de *MLH1*
+
+<div class="note">
+**Contexte biologique :** *MLH1* (*MutL Homolog 1*) est un gène suppresseur de tumeur impliqué dans le système de réparation des mésappariements (MMR). L'hyperméthylation de son promoteur entraîne une perte d'expression, conduisant à une instabilité microsatellitaire (MSI) et à l'accumulation de mutations. Ce mécanisme épigénétique est observé dans ~15% des cancers colorectaux sporadiques.
+</div>
+
+## Préparation et annotation des données MLH1
+
+```{r prepare_mlh1}
+# Fusion avec le manifeste pour annotations complètes
+cpg_MLH1_annote <- cpg_MLH1 %>%
+  left_join(
+    manifeste %>% dplyr::select(IlmnID, GENCODEv47_Feature_Exon_Number, 
+                                 Relation_to_UCSC_CpG_Island, DB_Element_Type),
+    by = "IlmnID"
+  ) %>%
+  mutate(
+    Contexte = case_when(
+      GENCODEv47_Feature_Exon_Number == "TSS" ~ "TSS",
+      GENCODEv47_Feature_Exon_Number == "1stExon" ~ "1er exon",
+      GENCODEv47_Feature_Exon_Number == "5'UTR" ~ "5'UTR",
+      GENCODEv47_Feature_Exon_Number == "3'UTR" ~ "3'UTR",
+      GENCODEv47_Feature_Exon_Number == "Body" ~ "Corps",
+      GENCODEv47_Feature_Exon_Number == "intron" ~ "Intron",
+      str_starts(GENCODEv47_Feature_Exon_Number, "exon") ~ "Exon",
+      TRUE ~ "Autre"
+    ),
+    CpG_Island = case_when(
+      Relation_to_UCSC_CpG_Island == "Island" ~ "Îlot",
+      Relation_to_UCSC_CpG_Island == "Shore" ~ "Rivage",
+      Relation_to_UCSC_CpG_Island == "Shelf" ~ "Plateau",
+      TRUE ~ "Autre"
+    )
+  )
+
+# Transformation en format long pour analyse
+donnees_mlh1 <- cpg_MLH1_annote %>%
+  pivot_longer(cols = starts_with("P"), names_to = "Echantillon", values_to = "Bvalue") %>%
+  left_join(annotations, by = c("Echantillon" = "ID")) %>%
+  filter(Contexte %in% c("TSS", "1er exon", "5'UTR", "3'UTR", "Exon", "Intron", "Corps"))
+
+# Ordonnancement des contextes (5' → 3')
+donnees_mlh1$Contexte <- factor(
+  donnees_mlh1$Contexte,
+  levels = c("TSS", "5'UTR", "1er exon", "Exon", "Intron", "Corps", "3'UTR")
+)
+
+cat(sprintf("✓ Sondes MLH1 analysées : %d
+  Distribution par contexte génomique :\n", n_distinct(cpg_MLH1$IlmnID)))
+print(table(cpg_MLH1_annote$Contexte))
+```
+
+## Distribution des β-values par contexte génomique
+
+```{r mlh1_boxplots, fig.width=14, fig.height=7}
+p_mlh1 <- ggplot(donnees_mlh1, aes(x = Status, y = Bvalue, fill = Status)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA, width = 0.6) +
+  geom_jitter(width = 0.15, size = 1.2, alpha = 0.4) +
+  facet_wrap(~ Contexte, nrow = 2, scales = "free_y") +
+  stat_compare_means(
+    method = "t.test", 
+    label = "p.format", 
+    size = 3.5,
+    label.y.npc = 0.92
+  ) +
+  scale_fill_manual(values = c("Normal" = "#0066cc", "Polyp" = "#d62728")) +
+  labs(
+    title = "Profil de méthylation du promoteur de MLH1",
+    subtitle = "Distribution des β-values selon le contexte génomique",
+    y = "β-value",
+    x = NULL
+  ) +
+  theme_pubr(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(size = 10, color = "gray30"),
+    legend.position = "top",
+    strip.text = element_text(face = "bold")
+  )
+
+print(p_mlh1)
+ggsave("FIGURES/MLH1_Distribution_Contextes.png", plot = p_mlh1, 
+       width = 14, height = 7, dpi = 300)
+
+cat("✓ Graphique généré : FIGURES/MLH1_Distribution_Contextes.png\n")
+```
+
+<div class="interpretation">
+**Interprétation :** Les régions promotrices proximales (TSS, 5'UTR) montrent une différence de méthylation significative entre tissus normaux et polypes. Cette hyperméthylation du promoteur est cohérente avec une répression transcriptionnelle de *MLH1*, mécanisme classique d'inactivation épigénétique dans les cancers CIMP-positifs.
+</div>
+
+## Profil positionnel le long du gène MLH1
+
+```{r mlh1_position, fig.width=14, fig.height=9}
+# Fusion avec coordonnées génomiques
+cpg_position <- merge(
+  cpg_MLH1 %>% distinct(IlmnID, .keep_all = TRUE), 
+  manifeste, 
+  by = "IlmnID"
+)
+
+# Calcul de la position relative au TSS
+tss_position <- min(cpg_position$Start_hg38, na.rm = TRUE)
+cpg_position <- cpg_position %>%
+  mutate(Position_Relative = Start_hg38 - tss_position - 1345) %>%
+  dplyr::select(IlmnID, P1:P7, Position_Relative)
+
+# Format long avec annotations de statut
+donnees_pos <- cpg_position %>%
+  pivot_longer(
+    cols = P1:P7,
+    names_to = "Echantillon", 
+    values_to = "Bvalue"
+  ) %>%
+  mutate(Statut = ifelse(Echantillon %in% c("P1", "P2"), "Normal", "Polype"))
+
+# Calcul des statistiques par position
+stats_position <- donnees_pos %>%
+  group_by(Position_Relative, Statut) %>%
+  summarise(
+    Moyenne = mean(Bvalue, na.rm = TRUE),
+    SD = sd(Bvalue, na.rm = TRUE),
+    N = n(),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    SE = SD / sqrt(N),
+    IC95_inf = Moyenne - 1.96 * SE,
+    IC95_sup = Moyenne + 1.96 * SE
+  )
+
+# Graphique région promotrice (-1500 à +2000 pb)
+p_proximal <- ggplot(
+  filter(stats_position, Position_Relative <= 2000),
+  aes(x = Position_Relative, y = Moyenne, color = Statut)
+) +
+  geom_errorbar(
+    aes(ymin = IC95_inf, ymax = IC95_sup),
+    width = 30,
+    alpha = 0.6,
+    size = 0.5
+  ) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "black", size = 0.6) +
+  annotate("text", x = 0, y = 0.95, label = "TSS", size = 3.5, fontface = "bold") +
+  scale_color_manual(values = c("Normal" = "#0066cc", "Polype" = "#d62728")) +
+  ylim(0, 1) +
+  labs(
+    title = "Région promotrice (-1500 à +2000 pb)",
+    x = "Position relative au TSS (pb)",
+    y = "β-value moyen ± IC95%"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 12),
+    axis.line = element_line(color = "black", size = 0.5),
+    axis.ticks = element_line(color = "black"),
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(color = "black", face = "bold"),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_blank()
+  )
+
+# Graphique région distale (+2000 à +60000 pb)
+p_distal <- ggplot(
+  filter(stats_position, Position_Relative > 2000),
+  aes(x = Position_Relative, y = Moyenne, color = Statut)
+) +
+  geom_errorbar(
+    aes(ymin = IC95_inf, ymax = IC95_sup),
+    width = 500,
+    alpha = 0.6,
+    size = 0.5
+  ) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  scale_color_manual(
+    values = c("Normal" = "#0066cc", "Polype" = "#d62728"),
+    name = "Statut"
+  ) +
+  ylim(0, 1) +
+  labs(
+    title = "Région génique distale (+2000 à +60000 pb)",
+    x = "Position relative au TSS (pb)",
+    y = "β-value moyen ± IC95%"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    axis.line = element_line(color = "black", size = 0.5),
+    axis.ticks = element_line(color = "black"),
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(color = "black", face = "bold"),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_blank(),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    legend.background = element_rect(fill = "white", color = "black", size = 0.3)
+  )
+
+# Assemblage des graphiques
+p_combine <- p_proximal / p_distal
+print(p_combine)
+
+ggsave("FIGURES/MLH1_Profil_Positionnel.png", plot = p_combine, 
+       width = 14, height = 9, dpi = 300, bg = "white")
+
+cat("✓ Graphique généré : FIGURES/MLH1_Profil_Positionnel.png\n")
+```
+
+<div class="interpretation">
+**Interprétation :** Le profil positionnel révèle une hyperméthylation marquée dans la région promotrice proximale (TSS ± 1500 pb) des polypes comparés aux tissus normaux. Cette observation est cohérente avec un mécanisme de répression transcriptionnelle par méthylation de l'ADN. La région génique distale montre des niveaux de méthylation plus faibles et stables, caractéristiques des régions non régulatrices.
+</div>
+
+---
+
+# Analyse différentielle du transcriptome
+
+<div class="note">
+**Méthodologie :** L'analyse différentielle repose sur le package `limma`, utilisant des modèles linéaires avec modération bayésienne des variances. Cette approche robuste est particulièrement adaptée aux cohortes de taille modérée. L'analyse est réalisée sur les données TPM (Transcripts Per Million) après transformation log2.
+</div>
+
+## Chargement et préparation des données
+
+```{r load_transcriptome_data}
+# Chargement des données TPM et raw counts
+transcriptome_tpm <- read.csv("DATA/tablecounts_tpm_polypes.csv", row.names = 1)
+colnames(transcriptome_tpm) <- c("P1", "P2", "P3", "P4", "P5", "P6", "P7")
+transcriptome_tpm <- transcriptome_tpm[, !(names(transcriptome_tpm) %in% "P5")]
+
+transcriptome_raw <- read.csv("DATA/tablecounts_raw_polypes.csv", row.names = 1)
+colnames(transcriptome_raw) <- c("P1", "P2", "P3", "P4", "P5", "P6", "P7")
+transcriptome_raw <- transcriptome_raw[, !(names(transcriptome_raw) %in% "P5")]
+transcriptome_raw_name <- transcriptome_raw
+
+# Chargement des métadonnées
+metaData <- read.csv("DATA/metadata_RNAseq.csv", sep = ";")
+metaData <- metaData[!grepl("P5", metaData$id), ]
+
+# Définition du design expérimental
+group <- factor(metaData$status, levels = c("Normal", "Polyp"))
+design <- model.matrix(~ group)
+
+cat(sprintf("✓ Données transcriptomiques chargées
+  • TPM : %d gènes × %d échantillons
+  • Design : Normal (n = %d), Polyp (n = %d)\n",
+  nrow(transcriptome_tpm), ncol(transcriptome_tpm),
+  sum(group == "Normal"), sum(group == "Polyp")))
+```
+
+## Analyse différentielle avec limma
+
+```{r limma_analysis}
+# Transformation logarithmique des TPM
+log2TPM <- log2(transcriptome_tpm)
+
+# Ajustement du modèle linéaire
+fit <- limma::lmFit(log2TPM, design)
+fit <- limma::eBayes(fit)
+
+# Extraction des résultats
+results_limma <- limma::topTable(fit, coef = "groupPolyp", number = Inf, sort.by = "none")
+
+cat(sprintf("✓ Analyse différentielle limma complétée
+  • Gènes testés : %d\n", nrow(results_limma)))
+```
+
+## Annotation avec BioMart
+
+```{r annotate_genes}
+## Annotation avec BioMart ------------------------------------------------------
+
+# Fonction pour retirer les versions Ensembl éventuelles :
+# ENSG00000141510.18 -> ENSG00000141510
+clean_ensembl_id <- function(x) {
+  sub("\\..*$", "", x)
+}
+
+# IDs Ensembl à annoter
+ensembl_ids <- unique(clean_ensembl_id(rownames(results_limma)))
+
+cat(sprintf(
+  "Annotation de %d identifiants Ensembl...\n",
+  length(ensembl_ids)
+))
+
+# -------------------------------------------------------------------------
+# 1. Tentatives successives sur plusieurs serveurs Ensembl
+# -------------------------------------------------------------------------
+
+ensembl_hosts <- c(
+  "https://www.ensembl.org",
+  "https://useast.ensembl.org",
+  "https://asia.ensembl.org"
+)
+
+gene_symbols <- NULL
+successful_host <- NULL
+
+for (host in ensembl_hosts) {
+
+  cat(sprintf("→ Tentative BioMart : %s\n", host))
+
+  gene_symbols_try <- tryCatch({
+
+    mart <- biomaRt::useMart(
+      biomart = "ENSEMBL_MART_ENSEMBL",
+      dataset = "hsapiens_gene_ensembl",
+      host = host
+    )
+
+    biomaRt::getBM(
+      attributes = c(
+        "ensembl_gene_id",
+        "hgnc_symbol"
+      ),
+      filters = "ensembl_gene_id",
+      values = ensembl_ids,
+      mart = mart
+    )
+
+  }, error = function(e) {
+
+    cat(sprintf(
+      "  ✗ Échec : %s\n",
+      conditionMessage(e)
+    ))
+
+    NULL
+  })
+
+  # Si la requête a fonctionné
+  if (!is.null(gene_symbols_try) &&
+      nrow(gene_symbols_try) > 0) {
+
+    gene_symbols <- gene_symbols_try
+    successful_host <- host
+
+    cat(sprintf(
+      "  ✓ Connexion réussie : %s\n",
+      host
+    ))
+
+    break
+  }
+}
+
+# -------------------------------------------------------------------------
+# 2. Backup local avec org.Hs.eg.db si BioMart est indisponible
+# -------------------------------------------------------------------------
+
+if (is.null(gene_symbols)) {
+
+  cat("\n⚠ Tous les serveurs BioMart sont indisponibles.\n")
+  cat("→ Tentative d'annotation locale avec org.Hs.eg.db...\n")
+
+  if (requireNamespace("org.Hs.eg.db", quietly = TRUE) &&
+      requireNamespace("AnnotationDbi", quietly = TRUE)) {
+
+    hgnc_symbols <- AnnotationDbi::mapIds(
+      org.Hs.eg.db::org.Hs.eg.db,
+      keys = ensembl_ids,
+      keytype = "ENSEMBL",
+      column = "SYMBOL",
+      multiVals = "first"
+    )
+
+    gene_symbols <- data.frame(
+      ensembl_gene_id = names(hgnc_symbols),
+      hgnc_symbol = unname(hgnc_symbols),
+      stringsAsFactors = FALSE
+    )
+
+    successful_host <- "org.Hs.eg.db (annotation locale)"
+
+    cat("✓ Annotation locale réalisée avec org.Hs.eg.db\n")
+
+  } else {
+
+    stop(
+      paste0(
+        "\nImpossible d'annoter les gènes.\n\n",
+        "BioMart est inaccessible et le package org.Hs.eg.db ",
+        "n'est pas installé.\n\n",
+        "Installe-le avec :\n",
+        "BiocManager::install('org.Hs.eg.db')"
+      )
+    )
+  }
+}
+
+# -------------------------------------------------------------------------
+# 3. Nettoyage de l'annotation
+# -------------------------------------------------------------------------
+
+# Certains symboles peuvent être vides
+gene_symbols$hgnc_symbol[
+  gene_symbols$hgnc_symbol == ""
+] <- NA
+
+# Sécurité : un seul résultat par Ensembl ID
+gene_symbols <- gene_symbols[
+  !duplicated(gene_symbols$ensembl_gene_id),
+]
+
+cat(sprintf(
+  "\n✓ Annotation terminée\n  • Source : %s\n  • %d / %d gènes avec symbole HGNC (%.1f%%)\n",
+  successful_host,
+  sum(!is.na(gene_symbols$hgnc_symbol)),
+  length(ensembl_ids),
+  100 * sum(!is.na(gene_symbols$hgnc_symbol)) / length(ensembl_ids)
+))
+
+# -------------------------------------------------------------------------
+# 4. Ajout des symboles HGNC aux TPM
+# -------------------------------------------------------------------------
+
+transcriptome_tpm_name <- transcriptome_tpm
+
+transcriptome_tpm_name$ensembl_gene_id <-
+  clean_ensembl_id(rownames(transcriptome_tpm_name))
+
+# Utilisation de match() plutôt que merge()
+# -> conserve exactement l'ordre original des gènes
+transcriptome_tpm_name$hgnc_symbol <-
+  gene_symbols$hgnc_symbol[
+    match(
+      transcriptome_tpm_name$ensembl_gene_id,
+      gene_symbols$ensembl_gene_id
+    )
+  ]
+
+# -------------------------------------------------------------------------
+# 5. Ajout des symboles HGNC aux raw counts
+# -------------------------------------------------------------------------
+
+transcriptome_raw_name <- transcriptome_raw
+
+transcriptome_raw_name$ensembl_gene_id <-
+  clean_ensembl_id(rownames(transcriptome_raw_name))
+
+transcriptome_raw_name$hgnc_symbol <-
+  gene_symbols$hgnc_symbol[
+    match(
+      transcriptome_raw_name$ensembl_gene_id,
+      gene_symbols$ensembl_gene_id
+    )
+  ]
+
+# -------------------------------------------------------------------------
+# 6. Ajout des symboles HGNC aux résultats limma
+# -------------------------------------------------------------------------
+
+results_limma_name <- results_limma
+
+results_limma_name$ensembl_gene_id <-
+  clean_ensembl_id(rownames(results_limma_name))
+
+results_limma_name$hgnc_symbol <-
+  gene_symbols$hgnc_symbol[
+    match(
+      results_limma_name$ensembl_gene_id,
+      gene_symbols$ensembl_gene_id
+    )
+  ]
+
+# -------------------------------------------------------------------------
+# 7. Résumé final
+# -------------------------------------------------------------------------
+
+n_annotated <- sum(
+  !is.na(results_limma_name$hgnc_symbol) &
+    results_limma_name$hgnc_symbol != ""
+)
+
+cat(sprintf(
+  "\n✓ Annotation ajoutée aux données\n  • TPM : %d gènes\n  • Raw counts : %d gènes\n  • Limma : %d gènes\n  • Symboles HGNC retrouvés : %d / %d (%.1f%%)\n",
+  nrow(transcriptome_tpm_name),
+  nrow(transcriptome_raw_name),
+  nrow(results_limma_name),
+  n_annotated,
+  nrow(results_limma_name),
+  100 * n_annotated / nrow(results_limma_name)
+))
+```
+
+## Nettoyage et filtrage des résultats
+
+```{r clean_results}
+# Filtrage des gènes sans symbole
+final_transcriptome <- results_limma_name %>% 
+  dplyr::filter(!is.na(hgnc_symbol), hgnc_symbol != "")
+
+# Exclusion de gènes spécifiques (si nécessaire)
+final_transcriptome <- final_transcriptome %>% 
+  dplyr::filter(!ensembl_gene_id %in% c("ENSG00000169064", "ENSG00000223839"))
+
+# Nettoyage des valeurs infinies/manquantes et catégorisation
+final_transcriptome_clean <- final_transcriptome %>%
+  dplyr::filter(!is.na(logFC), !is.na(adj.P.Val), is.finite(logFC), is.finite(adj.P.Val)) %>%
+  dplyr::mutate(adj.P.Val = ifelse(adj.P.Val == 0, 1e-300, adj.P.Val))
+
+final_transcriptome_clean$Significance <- with(
+  final_transcriptome_clean,
+  ifelse(adj.P.Val < 0.05 & logFC > 1, "Up",
+         ifelse(adj.P.Val < 0.05 & logFC < -1, "Down", "Not significant"))
+)
+
+# Export des résultats
+write.csv(final_transcriptome, "RESULTS/final_transcriptome.csv", row.names = FALSE)
+write.csv(final_transcriptome_clean, "RESULTS/final_transcriptome_with_significance.csv", row.names = FALSE)
+
+cat(sprintf("✓ Résultats nettoyés et exportés
+  • Gènes retenus : %d
+  • Sur-exprimés (Up) : %d
+  • Sous-exprimés (Down) : %d
+  • Non significatifs : %d\n",
+  nrow(final_transcriptome_clean),
+  sum(final_transcriptome_clean$Significance == "Up"),
+  sum(final_transcriptome_clean$Significance == "Down"),
+  sum(final_transcriptome_clean$Significance == "Not significant")))
+```
+
+## Volcano plot
+
+```{r volcano_plot, fig.width=13, fig.height=8}
+volcano_plot <- ggplot(
+  final_transcriptome_clean, 
+  aes(x = logFC, y = -log10(adj.P.Val), color = Significance)
+) +
+  geom_point(
+    alpha = ifelse(final_transcriptome_clean$Significance == "Up", 0.9,
+                   ifelse(final_transcriptome_clean$Significance == "Down", 0.9, 0.3)),
+    size = ifelse(final_transcriptome_clean$Significance == "Up", 2.5,
+                  ifelse(final_transcriptome_clean$Significance == "Down", 2.5, 1.5))
+  ) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  scale_color_manual(values = c("Up" = "#FA0024", "Down" = "blue", "Not significant" = "grey50")) +
+  labs(
+    title = "Differential Gene Expression: Polyp vs Normal",
+    x = expression(bold(log[2]~bold("Fold Change"))),
+    y = expression(bold(-log[10]~bold("Adjusted P-value")))
+  ) +
+  theme_classic(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+print(volcano_plot)
+ggsave("FIGURES/Volcano_plot_RNASEQ_HighRes.png", plot = volcano_plot, 
+       width = 13, height = 8, dpi = 300)
+
+cat("✓ Volcano plot généré : FIGURES/Volcano_plot_RNASEQ_HighRes.png\n")
+```
+
+<div class="interpretation">
+**Interprétation :** Le volcano plot met en évidence les gènes différentiellement exprimés entre tissus normaux et polypes. Les gènes en rouge ("Up") sont significativement sur-exprimés dans les polypes (logFC > 1, p.adj < 0.05), tandis que les gènes en bleu ("Down") sont sous-exprimés (logFC < -1, p.adj < 0.05). Les gènes non significatifs apparaissent en gris. Cette visualisation permet d'identifier rapidement les dérégulations transcriptionnelles majeures associées à la transformation pré-néoplasique.
+</div>
+
+---
+
+# Intégration multi-omique
+
+<div class="note">
+**Approche intégrative :** La corrélation entre profils de méthylation et d'expression permet d'identifier les gènes dont la régulation transcriptionnelle est sous contrôle épigénétique. Une anti-corrélation (hyperméthylation → sous-expression) suggère une répression médiée par la méthylation du promoteur.
+</div>
+
+## Calcul des différences de méthylation (promoteurs uniquement)
+
+```{r delta_methylation}
+# Fusion avec le manifeste pour annotations complètes
+donnees_meth_annote <- donnees_meth %>%
+  left_join(
+    manifeste %>% dplyr::select(
+      IlmnID, 
+      GENCODEv47_Feature_Exon_Number,
+      DB_Element_Type,
+      Relation_to_UCSC_CpG_Island,
+      GENCODEv47_Gene_Name
+    ),
+    by = "IlmnID"
+  )
+
+# Filtrage strict : TSS uniquement ET exclusion de "Body" dans UCSC_REFGENE_GROUPE
+donnees_clean <- donnees_meth_annote %>%
+  dplyr::select(-P5) %>%
+  filter(
+    GENCODEv47_Feature_Exon_Number == "TSS",
+    !str_detect(UCSC_REFGENE_GROUPE, "Body")  # NOUVEAU : exclusion des annotations "Body"
+  ) %>%
+  filter(!is.na(UCSC_REFGENE_NAME), UCSC_REFGENE_NAME != "")
+
+cat(sprintf("✓ Filtrage des sondes pour delta méthylation
+  • Critères appliqués :
+    - Annotation GENCODE v47 : TSS uniquement
+    - Exclusion : sondes avec 'Body' dans UCSC_REFGENE_GROUPE
+  • Sondes retenues : %d\n", nrow(donnees_clean)))
+
+# Expansion des annotations multi-gènes
+donnees_expanded <- donnees_clean %>%
+  dplyr::select(IlmnID, UCSC_REFGENE_NAME, P1, P2, P3, P4, P6, P7) %>%
+  separate_rows(UCSC_REFGENE_NAME, sep = ";") %>%
+  mutate(UCSC_REFGENE_NAME = str_trim(UCSC_REFGENE_NAME)) %>%
+  filter(!is.na(UCSC_REFGENE_NAME), UCSC_REFGENE_NAME != "")
+
+# Pivotage en format long
+donnees_long <- donnees_expanded %>%
+  pivot_longer(
+    cols = c(P1, P2, P3, P4, P6, P7), 
+    names_to = "Echantillon", 
+    values_to = "Bvalue"
+  ) %>%
+  left_join(annotations %>% dplyr::select(ID, Status), by = c("Echantillon" = "ID"))
+
+# Agrégation par gène et groupe
+moyennes_gene <- donnees_long %>%
+  group_by(UCSC_REFGENE_NAME, Status) %>%
+  summarise(
+    Moyenne = mean(Bvalue, na.rm = TRUE),
+    N_sondes = n_distinct(IlmnID),
+    N_obs = n(),
+    .groups = "drop"
+  )
+
+# Calcul du delta (Polype - Normal)
+delta_methylation <- moyennes_gene %>%
+  pivot_wider(
+    names_from = Status, 
+    values_from = c(Moyenne, N_sondes, N_obs)
+  ) %>%
+  rename(
+    Moy_Normal = Moyenne_Normal, 
+    Moy_Polype = Moyenne_Polyp,
+    N_sondes_Normal = N_sondes_Normal,
+    N_sondes_Polype = N_sondes_Polyp
+  ) %>%
+  filter(!is.na(Moy_Normal), !is.na(Moy_Polype)) %>%
+  filter(N_sondes_Normal >= 3, N_sondes_Polype >= 3) %>%  # Au moins 3 sondes par groupe
+  mutate(
+    N_sondes = pmin(N_sondes_Normal, N_sondes_Polype),
+    Delta_Meth = Moy_Polype - Moy_Normal
+  ) %>%
+  arrange(desc(abs(Delta_Meth)))
+
+# Export
+write.csv(delta_methylation, "RESULTS/Delta_Methylation_Genes_Promoteurs.csv", row.names = FALSE)
+
+cat(sprintf("\n✓ Delta méthylation calculé
+  • Gènes avec delta calculé : %d
+  • Hyperméthylés (Δβ > 0.1) : %d
+  • Hypométhylés (Δβ < -0.1) : %d\n\nTop 10 gènes hyperméthylés (promoteur TSS, sans Body) :\n",
+  nrow(delta_methylation),
+  sum(delta_methylation$Delta_Meth > 0.1),
+  sum(delta_methylation$Delta_Meth < -0.1)))
+print(head(delta_methylation %>% 
+           filter(Delta_Meth > 0) %>% 
+           arrange(desc(Delta_Meth)) %>%
+           dplyr::select(UCSC_REFGENE_NAME, Delta_Meth, Moy_Normal, Moy_Polype, N_sondes), 10))
+
+cat("\nTop 10 gènes hypométhylés (promoteur TSS, sans Body) :\n")
+print(head(delta_methylation %>% 
+           filter(Delta_Meth < 0) %>% 
+           arrange(Delta_Meth) %>%
+           dplyr::select(UCSC_REFGENE_NAME, Delta_Meth, Moy_Normal, Moy_Polype, N_sondes), 10))
+```
+
+## Fusion des données omiques
+
+```{r merge_omics}
+# Intégration méthylation-expression
+donnees_integrees <- merge(
+  final_transcriptome_clean,
+  delta_methylation %>% dplyr::select(UCSC_REFGENE_NAME, Delta_Meth, N_sondes),
+  by.x = "hgnc_symbol",
+  by.y = "UCSC_REFGENE_NAME"
+)
+
+# Catégorisation par quadrant
+donnees_integrees <- donnees_integrees %>%
+  mutate(
+    Quadrant = case_when(
+      Delta_Meth >= 0.1 & logFC >= 1.5 ~ "Hyperméthylé & Sur-exprimé",
+      Delta_Meth < -0.1 & logFC >= 1.5 ~ "Hypométhylé & Sur-exprimé",
+      Delta_Meth >= 0.1 & logFC < -1.5 ~ "Hyperméthylé & Sous-exprimé",
+      Delta_Meth < -0.1 & logFC < -1.5 ~ "Hypométhylé & Sous-exprimé",
+      TRUE ~ "Non catégorisé"
+    )
+  )
+
+cat(sprintf("✓ Intégration multi-omique réalisée
+  • Gènes avec données couplées : %d
+  • Basé sur : promoteurs TSS uniquement (sans Body)\n",
+  nrow(donnees_integrees)))
+```
+
+## Distribution par quadrant
+
+```{r quadrant_stats}
+stats_quadrants <- donnees_integrees %>%
+  filter(Quadrant != "Non catégorisé") %>%
+  group_by(Quadrant) %>%
+  summarise(N = n(), .groups = "drop") %>%
+  mutate(
+    x_label = case_when(
+      str_detect(Quadrant, "Hyperméthylé") ~ 0.25,
+      str_detect(Quadrant, "Hypométhylé") ~ -0.25
+    ),
+    y_label = case_when(
+      str_detect(Quadrant, "Sur-exprimé") ~ 5,
+      str_detect(Quadrant, "Sous-exprimé") ~ -5
+    )
+  )
+
+write.csv(stats_quadrants, "RESULTS/Distribution_Quadrants.csv", row.names = FALSE)
+
+cat("\n✓ Distribution des gènes par quadrant :\n")
+print(stats_quadrants %>% dplyr::select(Quadrant, N))
+```
+
+## Graphique de corrélation épigénome-transcriptome
+
+```{r correlation_plot, fig.width=15, fig.height=8}
+# Sélection des gènes à étiqueter
+genes_label <- donnees_integrees %>%
+  filter(adj.P.Val < 0.05, abs(Delta_Meth) > 0.1, abs(logFC) > 1.5)
+
+# Recatégorisation pour le graphique
+donnees_integrees <- donnees_integrees %>%
+  mutate(
+    Quadrant_Clean = case_when(
+      Delta_Meth >= 0.1 & logFC >= 1.5 ~ "Up & Hypermethylated",
+      Delta_Meth < -0.1 & logFC >= 1.5 ~ "Up & Hypomethylated",
+      Delta_Meth >= 0.1 & logFC < -1.5 ~ "Down & Hypermethylated",
+      Delta_Meth < -0.1 & logFC < -1.5 ~ "Down & Hypomethylated",
+      TRUE ~ "Not Significant"
+    )
+  )
+
+# Construction du graphique
+p_correlation <- ggplot(donnees_integrees, aes(x = Delta_Meth, y = logFC)) +
+  geom_point(
+    aes(color = Quadrant_Clean, shape = Quadrant_Clean, size = -log10(adj.P.Val)),
+    alpha = 0.6,
+    stroke = 1
+  ) +
+  scale_size_continuous(
+    trans = exp_trans(),
+    range = c(0.5, 14),
+    name = expression(bold(-log[10]~"(adjusted p-value)")),
+    breaks = c(0, 0.5, 1, 1.5, 2),
+    labels = c("0.0", "0.5", "1.0", "1.5", "2.0"),
+    guide = guide_legend(override.aes = list(size = 8))
+  ) +
+  scale_color_manual(
+    values = c(
+      "Up & Hypermethylated" = "red",
+      "Up & Hypomethylated" = "red",
+      "Down & Hypermethylated" = "blue",
+      "Down & Hypomethylated" = "blue",
+      "Not Significant" = "lightgray"
+    ),
+    name = "Category",
+    na.value = "lightgray"
+  ) +
+  scale_shape_manual(
+    values = c(
+      "Up & Hypermethylated" = 16,
+      "Up & Hypomethylated" = 1,
+      "Down & Hypermethylated" = 16,
+      "Down & Hypomethylated" = 1,
+      "Not Significant" = 16
+    ),
+    name = "Category",
+    na.value = 16
+  ) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "grey", size = 0.6) +
+  geom_vline(xintercept = 0, linetype = "solid", color = "grey", size = 0.6) +
+  geom_hline(yintercept = c(1.5, -1.5), linetype = "dashed", color = "black", size = 0.5) +
+  geom_vline(xintercept = c(0.1, -0.1), linetype = "dashed", color = "black", size = 0.5) +
+  xlim(-0.4, 0.4) +
+  ylim(-10, 10) +
+  labs(
+    x = expression(bold("Promoter Methylation Difference (Δ β-values: Polyp - Normal)")),
+    y = expression(bold("Expression") ~ bold(log[2]) ~ bold("FC (Polyp / Normal)")),
+    title = "Promoter Methylation vs Gene Expression",
+    subtitle = "TSS regions only (excluding Body annotations)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", color = "black", size = 16),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic", color = "gray40", size = 12),
+    axis.line.x = element_line(color = "black", size = 0.6),
+    axis.line.y = element_line(color = "black", size = 0.6),
+    axis.ticks = element_line(color = "black"),
+    axis.title = element_text(face = "bold", color = "black", size = 13),
+    axis.text = element_text(face = "bold", color = "black", size = 12),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 12, color = "black"),
+    legend.text = element_text(size = 11, color = "black"),
+    legend.background = element_rect(fill = "white", color = "black", size = 0.5),
+    legend.key.size = unit(1.2, "cm"),
+    panel.grid.major = element_line(color = "gray90", size = 0.3),
+    panel.grid.minor = element_blank(),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white")
+  ) +
+  guides(
+    color = guide_legend(
+      title.position = "top",
+      title.hjust = 0.5,
+      override.aes = list(alpha = 1, size = 6)
+    ),
+    shape = guide_legend(
+      title.position = "top",
+      title.hjust = 0.5,
+      override.aes = list(size = 6)
+    ),
+    size = guide_legend(
+      title.position = "top",
+      title.hjust = 0.5
+    )
+  )
+
+# Étiquetage des gènes significatifs
+if (nrow(genes_label) > 0) {
+  p_correlation <- p_correlation +
+    geom_text_repel(
+      data = genes_label,
+      aes(label = hgnc_symbol),
+      size = 4,
+      fontface = "bold",
+      color = "black",
+      max.overlaps = Inf,
+      box.padding = 1,
+      point.padding = 0.3,
+      segment.color = "gray30",
+      segment.size = 0.3
+    )
+}
+
+# Annotations de comptage dans les quadrants
+if (nrow(stats_quadrants) > 0) {
+  stats_quadrants <- stats_quadrants %>%
+    mutate(label_text = paste0("n = ", N))
+  
+  p_correlation <- p_correlation +
+    geom_label(
+      data = stats_quadrants,
+      aes(x = x_label, y = y_label, label = label_text),
+      color = "black",
+      fill = "white",
+      size = 5,
+      fontface = "bold",
+      label.size = 0.5,
+      inherit.aes = FALSE
+    )
+}
+
+print(p_correlation)
+ggsave("FIGURES/Correlation_Methylome_Transcriptome.png", 
+       plot = p_correlation, width = 15, height = 8, dpi = 300, bg = "white")
+
+cat("✓ Graphique généré : FIGURES/Correlation_Methylome_Transcriptome.png\n")
+```
+
+<div class="interpretation">
+**Interprétation biologique :**
+
+- **Quadrant inférieur droit** (hyperméthylation + sous-expression) : Ce quadrant contient les gènes montrant une répression transcriptionnelle probablement médiée par la méthylation du promoteur. Il s'agit du mécanisme épigénétique classique d'inactivation de gènes suppresseurs de tumeurs.
+
+- **Quadrant supérieur gauche** (hypométhylation + sur-expression) : Ces gènes suggèrent une activation transcriptionnelle associée à une déméthylation du promoteur, mécanisme potentiellement impliqué dans la réactivation d'oncogènes ou de gènes du développement silencieux dans les tissus adultes normaux.
+
+- **Quadrants paradoxaux** : Les gènes montrant une discordance entre méthylation et expression suggèrent des mécanismes de régulation alternatifs (modifications d'histones, facteurs de transcription, microARN, régulation post-transcriptionnelle).
+</div>
+
+---
+
+# Synthèse et export des résultats
+
+## Statistiques récapitulatives
+
+```{r summary_stats}
+cat("\n═══════════════════════════════════════════════════════════\n")
+cat("                    SYNTHÈSE DES ANALYSES                  \n")
+cat("═══════════════════════════════════════════════════════════\n\n")
+
+cat("MÉTHYLOME :\n")
+cat("  • Signature CIMP :", nrow(donnees_CIMP), "CpG analysés\n")
+cat("  • Sondes MLH1 :", n_distinct(cpg_MLH1$IlmnID), "CpG\n")
+cat("  • Gènes avec profil différentiel (promoteurs TSS sans Body) :", 
+    nrow(delta_methylation), "\n\n")
+
+cat("TRANSCRIPTOME :\n")
+cat("  • Gènes analysés :", nrow(final_transcriptome_clean), "\n")
+cat("  • Sur-exprimés (Up, logFC > 1, p.adj < 0.05) :", 
+    sum(final_transcriptome_clean$Significance == "Up"), "\n")
+cat("  • Sous-exprimés (Down, logFC < -1, p.adj < 0.05) :", 
+    sum(final_transcriptome_clean$Significance == "Down"), "\n\n")
+
+cat("INTÉGRATION MULTI-OMIQUE :\n")
+cat("  • Gènes avec données couplées :", nrow(donnees_integrees), "\n")
+cat("  • Gènes catégorisés dans quadrants :", 
+    sum(donnees_integrees$Quadrant != "Non catégorisé"), "\n")
+
+cat("\n  Distribution par quadrant :\n")
+for (i in 1:nrow(stats_quadrants)) {
+  cat("    •", stats_quadrants$Quadrant[i], ":", stats_quadrants$N[i], "gènes\n")
+}
+
+cat("\n═══════════════════════════════════════════════════════════\n")
+```
+
+## Inventaire des fichiers générés
+
+```{r list_outputs}
+cat("\n✓ FICHIERS GÉNÉRÉS\n\nFigures (FIGURES/) :\n")
+fichiers_fig <- list.files("FIGURES", full.names = FALSE)
+if (length(fichiers_fig) > 0) {
+  walk(fichiers_fig, ~ cat("  •", .x, "\n"))
+} else {
+  cat("  (aucun fichier)\n")
+}
+
+cat("\nRésultats (RESULTS/) :\n")
+fichiers_res <- list.files("RESULTS", full.names = FALSE)
+if (length(fichiers_res) > 0) {
+  walk(fichiers_res, ~ cat("  •", .x, "\n"))
+} else {
+  cat("  (aucun fichier)\n")
+}
+```
+
+## Traçabilité et informations de session
+
+```{r session_info}
+writeLines(capture.output(sessionInfo()), "RESULTS/Session_Info.txt")
+cat("\n✓ Informations de session enregistrées : RESULTS/Session_Info.txt
+  (Versions des packages R utilisés pour la reproductibilité)\n")
+```
+
+---
+
+# Conclusion
+
+Cette analyse intégrée révèle des altérations épigénétiques et transcriptomiques caractéristiques de la transformation pré-néoplasique des polypes colorectaux. Les principaux résultats incluent :
+
+1. **Signature CIMP** : Un phénotype d'hyperméthylation coordonnée observable dès le stade polype, permettant une stratification moléculaire précoce
+
+2. **Promoteur MLH1** : Une hyperméthylation régionale du promoteur compatible avec l'inactivation du système de réparation des mésappariements (MMR)
+
+3. **Profil transcriptomique** : Une dérégulation d'expression impliquant des voies de prolifération et de différenciation cellulaire
+
+4. **Corrélations épigénome-transcriptome** : Une régulation transcriptionnelle partiellement médiée par la méthylation de l'ADN au niveau des promoteurs, avec identification de gènes clés montrant une anti-corrélation cohérente avec un mécanisme de répression épigénétique
+
+Ces données constituent une base solide pour des analyses approfondies (enrichissement fonctionnel, validation par bisulfite sequencing, études de survie) et s'inscrivent dans une approche de médecine de précision pour la stratification des patients.
+
+---
+
+<div class="note">
+**Pour aller plus loin :**
+
+- **Analyses fonctionnelles** : Gene Ontology, KEGG, Reactome pour identifier les voies biologiques dérégulées
+- **Validation orthogonale** : qPCR pour l'expression, pyroséquençage bisulfite pour la méthylation
+- **Corrélation clinique** : Association avec données de récidive, survie, réponse thérapeutique
+- **Extension omique** : Intégration de marques épigénétiques supplémentaires (modifications d'histones, accessibilité chromatinienne par ATAC-seq)
+- **Analyses de réseaux** : Identification de modules co-régulés (WGCNA) et de régulateurs maîtres
+</div>
+
+---
+
+
+
+*Document généré le `r Sys.Date()`*  
+*DU Next Generation Sequencing - Université Paris Cité*  
+*Module : Analyses Intégrées Multi-Omiques*
+
+<style>
+#back-to-top {
+  display: none;
+  position: fixed;
+  bottom: 20px;
+  right: 30px;
+  z-index: 99;
+  border: none;
+  outline: none;
+  background-color: #0066cc;
+  color: white;
+  cursor: pointer;
+  padding: 15px;
+  border-radius: 10px;
+  font-size: 18px;
+}
+
+#back-to-top:hover {
+  background-color: #004080;
+}
+</style>
+
+<script>
+// Bouton retour en haut
+window.onscroll = function() {
+  var btn = document.getElementById("back-to-top");
+  if (document.body.scrollTop > 300 || document.documentElement.scrollTop > 300) {
+    btn.style.display = "block";
+  } else {
+    btn.style.display = "none";
+  }
+};
+
+function topFunction() {
+  document.body.scrollTop = 0;
+  document.documentElement.scrollTop = 0;
+}
+</script>
+
+<button onclick="topFunction()" id="back-to-top" title="Retour en haut">↑</button>
