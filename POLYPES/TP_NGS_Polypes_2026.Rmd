@@ -189,74 +189,21 @@ cat("✓ Environnement R configuré avec succès\n")
 
 # Importation des données
 
-## Vérification de l'intégrité des fichiers
 
-```{r check_data_integrity}
-fichiers_requis <- c(
-  "manifest_COMBINED_EPICv2_priority_EPICv1_fallback.csv",
-  "CIMP_meth_signature.csv",
-  "FinalReport_selected_columns_with_gene_info.txt",
-  "Correspondance_Prlvement_ID.csv",
-  "CG_MLH1_with_annotations.txt",
-  "tablecounts_tpm_polypes.csv",
-  "tablecounts_raw_polypes.csv",
-  "metadata_RNAseq.csv"
-)
-
-dossiers_recherche <- c(
-  "DATA",
-  "/srv/data/meg-m2-gac"
-)
-
-# Recherche chaque fichier dans les dossiers définis
-chemins_fichiers <- sapply(fichiers_requis, function(f) {
-  chemins_possibles <- file.path(dossiers_recherche, f)
-  chemins_existants <- chemins_possibles[file.exists(chemins_possibles)]
-  
-  if (length(chemins_existants) > 0) {
-    chemins_existants[1]
-  } else {
-    NA_character_
-  }
-})
-
-statut_fichiers <- !is.na(chemins_fichiers)
-
-if (all(statut_fichiers)) {
-  cat("✓ Tous les fichiers requis sont présents\n\n")
-  cat("Fichiers trouvés :\n")
-  for (i in seq_along(fichiers_requis)) {
-    cat(sprintf("  ✓ %s -> %s\n",
-                fichiers_requis[i],
-                chemins_fichiers[i]))
-  }
-} else {
-  cat("✗ Fichiers manquants :\n")
-  print(fichiers_requis[!statut_fichiers])
-  
-  stop(
-    paste0(
-      "Certains fichiers requis sont absents.\n",
-      "Dossiers recherchés :\n  - ",
-      paste(dossiers_recherche, collapse = "\n  - ")
-    )
-  )
-}
-```
 
 ## Chargement des données de méthylation
 
 ```{r load_methylation}
-# Manifeste Illumina EPIC combiné (EPICv1 + EPICv2)
-manifeste <- fread("/srv/data/meg-m2-gac/manifest_COMBINED_EPICv2_priority_EPICv1_fallback.csv", sep = ",") %>%
-  rename(chromosome = CHR, Start_hg38 = MAPINFO)
+# manifest Illumina EPIC combiné (EPICv1 + EPICv2)
+manifest <- fread("/srv/data/meg-m2-gac/manifest_COMBINED_EPICv2_priority_EPICv1_fallback.csv", sep = ",") %>%
+  dplyr::rename(chromosome = CHR, Start_hg38 = MAPINFO)
 
 # Signature CIMP (78 CpG discriminants)
 signature_CIMP <- read.csv("DATA/CIMP_meth_signature.csv", sep = ";")
 
 # Matrice de β-values (échantillons × sondes)
 donnees_meth <- read.delim("/srv/data/meg-m2-gac/FinalReport_selected_columns_with_gene_info.txt", sep = "\t")
-colnames(donnees_meth) <- c("IlmnID", "P1", "P2", "P3", "P4", "P5", "P6", "P7", 
+colnames(donnees_meth) <- c("IlmnID", "P1", "P2", "P3", "P4", "P5", "P6", "P7",
                              "UCSC_REFGENE_NAME", "UCSC_REFGENE_GROUPE")
 
 # Métadonnées cliniques
@@ -268,11 +215,11 @@ colnames(cpg_MLH1) <- c("IlmnID", "UCSC_REFGENE_NAME", "UCSC_REFGENE_GROUPE",
                         "P1", "P2", "P3", "P4", "P5", "P6", "P7")
 
 cat(sprintf("✓ Données de méthylation importées
-  • Manifeste : %d sondes (EPICv1 + EPICv2)
+  • manifest : %d sondes (EPICv1 + EPICv2)
   • Matrice de méthylation : %d sondes × %d échantillons
   • Signature CIMP : %d CpG
   • Sondes MLH1 : %d\n", 
-  nrow(manifeste), 
+  nrow(manifest), 
   nrow(donnees_meth), 
   ncol(donnees_meth) - 2,
   nrow(signature_CIMP),
@@ -312,7 +259,7 @@ cat(sprintf("✓ Données de transcriptome importées
 
 ```{r prepare_cimp}
 # Fusion signature CIMP avec annotations génomiques
-signature_complete <- merge(signature_CIMP, manifeste, by = "IlmnID")
+signature_complete <- merge(signature_CIMP, manifest, by = "IlmnID")
 
 # Extraction des β-values pour les 78 CpG de la signature
 donnees_CIMP <- merge(donnees_meth, signature_complete, by = "IlmnID") %>%
@@ -340,7 +287,7 @@ anno_col <- anno_col[colnames(matrice_beta), ]
 anno_cpg <- donnees_CIMP %>%
   dplyr::select(IlmnID) %>%
   left_join(
-    manifeste %>% dplyr::select(IlmnID, Relation_to_UCSC_CpG_Island, 
+    manifest %>% dplyr::select(IlmnID, Relation_to_UCSC_CpG_Island, 
                                  DB_Element_Type, GENCODEv47_Feature_Exon_Number),
     by = "IlmnID"
   ) %>%
@@ -457,10 +404,10 @@ cat("✓ Heatmap CIMP générée : FIGURES/Heatmap_Signature_CIMP.pdf\n")
 ## Préparation et annotation des données MLH1
 
 ```{r prepare_mlh1}
-# Fusion avec le manifeste pour annotations complètes
+# Fusion avec le manifest pour annotations complètes
 cpg_MLH1_annote <- cpg_MLH1 %>%
   left_join(
-    manifeste %>% dplyr::select(IlmnID, GENCODEv47_Feature_Exon_Number, 
+    manifest %>% dplyr::select(IlmnID, GENCODEv47_Feature_Exon_Number, 
                                  Relation_to_UCSC_CpG_Island, DB_Element_Type),
     by = "IlmnID"
   ) %>%
@@ -545,14 +492,14 @@ cat("✓ Graphique généré : FIGURES/MLH1_Distribution_Contextes.png\n")
 # Fusion avec coordonnées génomiques
 cpg_position <- merge(
   cpg_MLH1 %>% distinct(IlmnID, .keep_all = TRUE), 
-  manifeste, 
+  manifest, 
   by = "IlmnID"
 )
 
 # Calcul de la position relative au TSS
 tss_position <- min(cpg_position$Start_hg38, na.rm = TRUE)
 cpg_position <- cpg_position %>%
-  mutate(Position_Relative = Start_hg38 - tss_position - 1345) %>%
+  dplyr::mutate(Position_Relative = Start_hg38 - tss_position - 1345) %>%
   dplyr::select(IlmnID, P1:P7, Position_Relative)
 
 # Format long avec annotations de statut
@@ -1017,10 +964,10 @@ cat("✓ Volcano plot généré : FIGURES/Volcano_plot_RNASEQ_HighRes.png\n")
 ## Calcul des différences de méthylation (promoteurs uniquement)
 
 ```{r delta_methylation}
-# Fusion avec le manifeste pour annotations complètes
+# Fusion avec le manifest pour annotations complètes
 donnees_meth_annote <- donnees_meth %>%
   left_join(
-    manifeste %>% dplyr::select(
+    manifest %>% dplyr::select(
       IlmnID, 
       GENCODEv47_Feature_Exon_Number,
       DB_Element_Type,
@@ -1077,7 +1024,7 @@ delta_methylation <- moyennes_gene %>%
     names_from = Status, 
     values_from = c(Moyenne, N_sondes, N_obs)
   ) %>%
-  rename(
+  dplyr::rename(
     Moy_Normal = Moyenne_Normal, 
     Moy_Polype = Moyenne_Polyp,
     N_sondes_Normal = N_sondes_Normal,
