@@ -258,7 +258,7 @@ cat(sprintf("  • Nombre de patients : %d
 ```{r variable_cpg}
 # Préparation de la matrice (exclusion de la colonne "Name")
 data_heat <- data %>% 
-  select(-Name)
+  dplyr::select(-Name)
 data_heat <- data[,2:17]
 
 mat <- as.matrix(data_heat)
@@ -350,7 +350,7 @@ cat("✓ Heatmap simple générée : FIGURES/Heatmap_Lymphomes_Simple.pdf\n")
 ```{r prepare_annotations}
 # Préparation du dataframe d'annotations
 anno_col <- annotation %>%
-  select(ID, Patient, Deceased, Transformed, Gene_1) %>%
+  dplyr::select(ID, Patient, Deceased, Transformed, Gene_1) %>%
   as.data.frame()
 
 # Alignement des annotations avec l'ordre des colonnes de la matrice
@@ -496,7 +496,7 @@ L'Analyse en Composantes Principales (PCA) est une méthode de réduction de dim
 
 ```{r pca_analysis}
 # Préparation des données pour l'ACP
-data_heat <- data %>% select(-Name)
+data_heat <- data %>% dplyr::select(-Name)
 
 # Calcul de l'ACP (transposition pour avoir échantillons en lignes)
 data_PCA <- prcomp(t(data_heat), scale. = TRUE)
